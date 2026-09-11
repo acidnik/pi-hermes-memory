@@ -517,6 +517,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "memoryMode": "policy-only",
   "memoryPolicyStyle": "full",
   "memoryCharLimit": 5000,
+  "markdownMirror": true,
   "userCharLimit": 5000,
   "projectCharLimit": 5000,
   "memoryDir": "~/.pi/agent/pi-hermes-memory",
@@ -558,6 +559,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
 | `standingInstructionsEnabled` | `true` | Inject `STANDING.md` (pinned via `/memory-pin`) into every session, in every memory mode |
 | `memoryCharLimit` | `5000` | Max characters in MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
+| `markdownMirror` | `true` | Mirror SQLite-authoritative memory back into the Markdown files as a human-readable export. In `policy-only` mode, SQLite is the primary write target; set this to `false` to stop writing `MEMORY.md` / `USER.md` / `failures.md` entirely (memory stays fully searchable in SQLite, and reads come from SQLite). `legacy-inject` always writes the Markdown files because it injects memory from them |
 | `userCharLimit` | `5000` | Max characters in USER.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
 | `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
 | `memoryDir` | `~/.pi/agent/pi-hermes-memory` | Custom directory for extension storage files |

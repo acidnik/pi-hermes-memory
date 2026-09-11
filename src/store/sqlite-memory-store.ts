@@ -264,6 +264,59 @@ function isShortCjkLiteralQuery(query: string): boolean {
     && /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u.test(trimmed);
 }
 
+
+/**
+ * Serialize a SQLite memory entry back into the Markdown entry format
+ * (inverse of parseMarkdownMemoryEntry). Used by the SQLite-primary read
+ * path so MemoryStore can load the authoritative scope without the files.
+ */
+export function formatMarkdownMemoryEntry(entry: SqliteMemoryEntry): string {
+  const projectMetadata = entry.project?.trim()
+    ? `, project64=${Buffer.from(entry.project.trim(), "utf-8").toString("base64url")}`
+    : "";
+  return `${entry.content} <!-- created=${entry.created}, last=${entry.lastReferenced}${projectMetadata} -->`;
+}
+
+/**
+ * Load the authoritative entry list of one scope from SQLite as Markdown
+ * entries (insertion order). failure loads every project scope; the other
+ * targets load the global (project IS NULL) or the named project scope.
+ */
+export function loadMemoryScopeEntries(
+  dbManager: DatabaseManager,
+  target: 'memory' | 'user' | 'failure',
+  project: string | null = null,
+): string[] {
+  const db = dbManager.getDb();
+  const conditions: string[] = ['target = ?'];
+  const params: unknown[] = [target];
+  if (target !== 'failure') {
+    if (project === null) {
+      conditions.push('project IS NULL');
+    } else {
+      conditions.push('project = ?');
+      params.push(project);
+    }
+  }
+  const rows = db.prepare(`
+    SELECT ${MEMORY_SELECT_COLUMNS}
+    FROM memories
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY id ASC
+  `).all(...params) as Array<{
+    id: number;
+    project: string | null;
+    target: string;
+    category: string | null;
+    content: string;
+    failure_reason: string | null;
+    tool_state: string | null;
+    corrected_to: string | null;
+    created: string;
+    last_referenced: string;
+  }>;
+  return rows.map((row) => formatMarkdownMemoryEntry(mapRow(row)));
+}
 function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null } {
   const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+)(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/);
   if (match) {

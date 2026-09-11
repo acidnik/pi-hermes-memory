@@ -175,6 +175,9 @@ export default function (pi: ExtensionAPI) {
       projectStore = createProjectStore(nextProject);
       configureProjectStore(projectStore);
       configureMemoryToolProjectStore(projectStore);
+      // Bind the project name BEFORE loadFromDisk: the SQLite-primary scope
+      // loader resolves the project through the live projectName reference.
+      projectName = nextProject.name ?? "";
       projectLoad = projectStore?.loadFromDisk().catch((error) => {
         projectMemoryDir = null;
         projectStore = null;
@@ -184,7 +187,6 @@ export default function (pi: ExtensionAPI) {
       });
     }
     await projectLoad;
-    projectName = nextProject.name ?? "";
   };
   // Never written by review, consolidation or the correction detector — see
   // store/standing-instructions.ts for why provenance has to be structural.
