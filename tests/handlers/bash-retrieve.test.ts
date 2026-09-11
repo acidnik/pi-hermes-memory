@@ -3,8 +3,10 @@
  *
  * When enabled, the model's bash command is reduced to search terms (command
  * names, relative paths/filenames; `-`- and `/`-prefixed tokens dropped) and
- * the top-K memory matches are appended to the tool result content, so the
- * model sees them right after the tool output. Dedup is shared with
+ * the top-K memory matches are delivered as a separate custom message (pi's
+ * steer queue) right after the tool output — the bash tool result itself is
+ * left untouched. The transcript renders the block through the shared
+ * auto-retrieve renderer (collapsible/clickable). Dedup is shared with
  * auto-retrieve: each row is injected at most once per session across both
  * features (persisted in `retrieved_memories`), reset by compaction/quit.
  */
@@ -20,20 +22,30 @@ import {
   extractCommandTerms,
   renderBashRetrieveBlock,
 } from "../../src/handlers/bash-retrieve.js";
+import { RETRIEVAL_MESSAGE_TYPE } from "../../src/handlers/auto-retrieve.js";
 import type { MemoryConfig } from "../../src/types.js";
 
 type Handler = (event: any, ctx: any) => unknown;
 
+interface SentMessage {
+  customType: string;
+  content: string;
+  display: boolean;
+  details?: { count?: number; keywords?: string; entries?: Array<{ content: string }> };
+}
+
 interface Harness {
   handlers: Record<string, Handler[]>;
+  sentMessages: SentMessage[];
+  renderers: Record<string, unknown>;
   ctx: any;
 }
 
-/** Fire the tool_result hook and return the returned patch (if any). */
+/** Fire the tool_result hook; the delivered block (if any) lands in harness.sentMessages. */
 async function fireToolResult(
   harness: Harness,
   event: { toolName: string; input: Record<string, unknown>; content?: unknown[] },
-): Promise<{ content?: unknown[] } | undefined> {
+): Promise<unknown> {
   const handler = harness.handlers.tool_result?.[0];
   assert.ok(handler, "tool_result handler registered");
   return await handler(
@@ -45,7 +57,11 @@ async function fireToolResult(
       ...event,
     },
     harness.ctx,
-  ) as { content?: unknown[] } | undefined;
+  );
+}
+
+function lastSent(harness: Harness): SentMessage | undefined {
+  return harness.sentMessages[harness.sentMessages.length - 1];
 }
 
 function createHarness(config: MemoryConfig, opts: {
@@ -55,13 +71,23 @@ function createHarness(config: MemoryConfig, opts: {
   ready?: boolean;
 } = {}): Harness {
   const handlers: Record<string, Handler[]> = {};
+  const sentMessages: SentMessage[] = [];
+  const renderers: Record<string, unknown> = {};
   const pi = {
     on: (event: string, handler: Handler) => {
       (handlers[event] ??= []).push(handler);
     },
+    sendMessage: (message: SentMessage) => {
+      sentMessages.push(message);
+    },
+    registerMessageRenderer: (type: string, renderer: unknown) => {
+      renderers[type] = renderer;
+    },
   } as any;
   const harness: Harness = {
     handlers,
+    sentMessages,
+    renderers,
     ctx: {
       sessionManager: { getSessionId: () => opts.sessionId ?? "test-session" },
       cwd: opts.cwd ?? "/tmp/test-project",
@@ -205,62 +231,69 @@ afterEach(() => {
 });
 
 describe("setupBashRetrieve", () => {
-
   it("registers no tool_result handler when disabled", () => {
     const harness = createHarness(baseConfig());
     assert.strictEqual(harness.handlers.tool_result, undefined);
   });
 
-  it("appends a memory block to the bash tool result", async () => {
+  it("registers the shared memory-retrieval renderer", () => {
+    const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }));
+    assert.strictEqual(typeof harness.renderers[RETRIEVAL_MESSAGE_TYPE], "function");
+  });
+
+  it("delivers the memory block as a separate message and leaves the tool output untouched", async () => {
     const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
-    const patch = await fireToolResult(harness, {
+    const result = await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm run build" },
     });
-    assert.ok(patch, "expected a content patch");
-    const content = patch!.content!;
-    assert.ok(Array.isArray(content));
-    // Original tool output preserved, memory block appended after it.
-    assert.strictEqual((content[0] as { type: string }).type, "text");
-    const block = content[content.length - 1] as { text: string };
-    assert.ok(block.text.includes("<retrieved-memory>"));
-    assert.ok(block.text.includes("npm run build runs the full type check"));
+    // No content patch: the bash tool result the model reads stays clean.
+    assert.strictEqual(result, undefined);
+
+    assert.strictEqual(harness.sentMessages.length, 1);
+    const sent = lastSent(harness)!;
+    assert.strictEqual(sent.customType, RETRIEVAL_MESSAGE_TYPE);
+    assert.strictEqual(sent.display, true);
+    assert.ok(sent.content.includes("<retrieved-memory>"));
+    assert.ok(sent.content.includes("match the command you just ran"));
+    assert.ok(sent.content.includes("npm run build runs the full type check"));
+    assert.strictEqual(sent.details?.count, 2);
   });
 
   it("does nothing for non-bash tool results", async () => {
     const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
-    const patch = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "read",
       input: { path: "/tmp/file.ts" },
     });
-    assert.strictEqual(patch, undefined);
+    assert.strictEqual(harness.sentMessages.length, 0);
   });
 
   it("does not inject when the command has no searchable terms", async () => {
     const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
-    const patch = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "echo $PATH" },
     });
-    assert.strictEqual(patch, undefined);
+    assert.strictEqual(harness.sentMessages.length, 0);
   });
 
   it("does not inject when nothing matches", async () => {
     const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
-    const patch = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "frobnicate the zorp" },
     });
-    assert.strictEqual(patch, undefined);
+    assert.strictEqual(harness.sentMessages.length, 0);
   });
 
   it("scopes retrieval to the active project plus global", async () => {
-    const harnessA = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
-    const patch = await fireToolResult(harnessA, {
+    const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "docker compose up" },
     });
-    const text = (patch!.content!.at(-1) as { text: string }).text;
+    const text = lastSent(harness)!.content;
     assert.ok(text.includes("docker compose up in the project root"));
     assert.ok(!text.includes("other project"));
   });
@@ -270,11 +303,11 @@ describe("setupBashRetrieve", () => {
       baseConfig({ bashRetrieve: { enabled: true, targets: ["failure"] } }),
       { project: "project-a" },
     );
-    const patch = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "sqlite migrations" },
     });
-    const text = (patch!.content!.at(-1) as { text: string }).text;
+    const text = lastSent(harness)!.content;
     assert.ok(text.includes("do not run sqlite migrations"));
     assert.ok(!text.includes("npm run build"));
   });
@@ -284,11 +317,11 @@ describe("setupBashRetrieve", () => {
       baseConfig({ bashRetrieve: { enabled: true, minTerms: 3 } }),
       { project: "project-a" },
     );
-    const patch = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm test" },
     });
-    assert.strictEqual(patch, undefined);
+    assert.strictEqual(harness.sentMessages.length, 0);
   });
 
   it("skips retrieval until isReady", async () => {
@@ -296,11 +329,11 @@ describe("setupBashRetrieve", () => {
       baseConfig({ bashRetrieve: { enabled: true } }),
       { project: "project-a", ready: false },
     );
-    const patch = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm run build" },
     });
-    assert.strictEqual(patch, undefined);
+    assert.strictEqual(harness.sentMessages.length, 0);
   });
 
   it("applies maxChars budget", async () => {
@@ -308,63 +341,62 @@ describe("setupBashRetrieve", () => {
       baseConfig({ bashRetrieve: { enabled: true, maxChars: 60 } }),
       { project: "project-a" },
     );
-    const patch = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm run build docker compose" },
     });
     // Two long entries far exceed the budget; the first is unconditionally
     // kept but the second must be dropped, so the block has exactly one entry.
-    const text = (patch!.content!.at(-1) as { text: string }).text;
-    assert.strictEqual(text.split("- [").length - 1, 1, "budget keeps at most one entry");
+    assert.strictEqual(lastSent(harness)!.details!.entries!.length, 1, "budget keeps at most one entry");
   });
 
   it("does not re-inject the same rows on repeated commands (shared dedup)", async () => {
     const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
-    const first = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm run build" },
     });
-    assert.ok(first, "first command injects a block");
+    assert.strictEqual(harness.sentMessages.length, 1, "first command injects a block");
     // Same command again: every matching row is already marked as retrieved.
-    const second = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm run build" },
     });
-    assert.strictEqual(second, undefined);
+    assert.strictEqual(harness.sentMessages.length, 1);
   });
 
   it("still injects rows matched by a different command", async () => {
     const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
-    const first = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm run build" },
     });
-    assert.ok(first, "first command injects a block");
-    const second = await fireToolResult(harness, {
+    assert.strictEqual(harness.sentMessages.length, 1);
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "docker compose up" },
     });
-    const text = (second!.content!.at(-1) as { text: string }).text;
+    const text = lastSent(harness)!.content;
     assert.ok(text.includes("start the api server with docker compose up"));
     assert.ok(!text.includes("npm run build"));
   });
 
   it("resets dedup after compaction, so rows become injectable again", async () => {
     const harness = createHarness(baseConfig({ bashRetrieve: { enabled: true } }), { project: "project-a" });
-    const first = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm run build" },
     });
-    assert.ok(first, "first command injects a block");
+    assert.strictEqual(harness.sentMessages.length, 1);
 
     const compact = harness.handlers.session_compact?.[0];
     assert.ok(compact, "session_compact handler registered");
     compact({ type: "session_compact" }, harness.ctx);
 
-    const after = await fireToolResult(harness, {
+    await fireToolResult(harness, {
       toolName: "bash",
       input: { command: "npm run build" },
     });
-    assert.ok(after, "after compaction the same rows are injected again");
+    assert.strictEqual(harness.sentMessages.length, 2, "after compaction the same rows are injected again");
   });
 });
