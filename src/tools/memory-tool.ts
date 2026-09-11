@@ -119,6 +119,7 @@ async function syncAddToSqlite(
   failureReason: string | undefined,
   dbManager: DatabaseManager | null,
   projectName?: string | null,
+  keywords?: string[],
 ): Promise<string | null> {
   if (!dbManager) return null;
 
@@ -137,6 +138,7 @@ async function syncAddToSqlite(
         project: sqliteProject ?? null,
         category: failureCategory,
         failureReason,
+        keywords,
       });
       return null;
     }
@@ -145,6 +147,7 @@ async function syncAddToSqlite(
       content,
       target: sqliteTarget,
       project: sqliteProject ?? null,
+      keywords,
     });
     return null;
   } catch (err) {
@@ -303,6 +306,7 @@ type MemoryToolParams = {
   old_text?: string;
   category?: MemoryCategory;
   failure_reason?: string;
+  keywords?: string[];
 };
 export function registerMemoryTool(
   pi: ExtensionAPI,
@@ -372,7 +376,7 @@ export function registerMemoryTool(
     params: MemoryToolParams,
     signal?: AbortSignal,
   ) => {
-    const { target: rawTarget, content, old_text, category, failure_reason } = params;
+    const { target: rawTarget, content, old_text, category, failure_reason, keywords } = params;
     const target = rawTarget === "project" ? "memory" : rawTarget;
     const activeProjectStore = resolveProjectStore(projectStore);
     const activeProjectName = resolveProjectName(projectName);
@@ -411,15 +415,16 @@ export function registerMemoryTool(
           result = await store_.addFailure(content, {
             category: memoryCategory,
             failureReason: failure_reason,
+            keywords,
           });
           if (result.success && !syncHandled) {
-            syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName);
+            syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName, keywords);
           }
         } else {
-          result = await store_.add(target, content, signal);
+          result = await store_.add(target, content, signal, { keywords });
           if (result.success && !syncHandled) {
             await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, activeProjectName);
-            syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName);
+            syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName, keywords);
           }
         }
         break;
@@ -508,6 +513,7 @@ Add one durable entry. The target and content fields are required.`,
       content: Type.String({ description: "Entry content to save." }),
       category: Type.Optional(category),
       failure_reason: Type.Optional(Type.String({ description: "Why a failure occurred." })),
+      keywords: Type.Optional(Type.Array(Type.String({ description: "Search synonyms / equivalents / inflections (e.g. [index, indices, индекс])." }), { description: "Optional searchable keywords for the entry." })),
     }),
   );
   registerActionTool(

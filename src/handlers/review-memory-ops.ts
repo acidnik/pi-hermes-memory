@@ -16,6 +16,8 @@ export interface ReviewMemoryOperation {
   old_text?: string;
   category?: MemoryCategory;
   failure_reason?: string;
+  /** Search synonyms / equivalents / inflections (add operations only). */
+  keywords?: string[];
 }
 
 export interface ApplyReviewOperationsResult {
@@ -318,6 +320,10 @@ export function parseReviewOperations(text: string): ReviewMemoryOperation[] | n
     if (typeof op.old_text === "string") operation.old_text = op.old_text;
     if (isMemoryCategory(op.category)) operation.category = op.category;
     if (typeof op.failure_reason === "string") operation.failure_reason = op.failure_reason;
+    if (Array.isArray(op.keywords)
+      && op.keywords.every((item) => typeof item === "string")) {
+      operation.keywords = (op.keywords as string[]).map((item) => item.trim()).filter(Boolean);
+    }
     parsed.push(operation);
   }
 
@@ -380,6 +386,7 @@ export async function applyReviewOperations(
       category: target === "failure" ? operation.category ?? "failure" : operation.category,
       failureReason: operation.failure_reason,
       project: target === "failure" ? projectName ?? undefined : undefined,
+      keywords: operation.keywords,
     }));
     const result = await activeStore.applyMutationPlan(memoryTarget, mutationOperations, {
       requireShrink: true,
@@ -428,6 +435,7 @@ export async function applyReviewOperations(
             category,
             failureReason: op.failure_reason,
             project: projectName ?? undefined,
+            keywords: op.keywords,
             signal: options.signal,
           });
           if (result.success) {
@@ -436,7 +444,7 @@ export async function applyReviewOperations(
             skippedCount++;
           }
         } else {
-          result = await activeStore.add(memoryTarget, op.content, options.signal);
+          result = await activeStore.add(memoryTarget, op.content, options.signal, { keywords: op.keywords });
           if (result.success) {
             appliedCount++;
           } else {

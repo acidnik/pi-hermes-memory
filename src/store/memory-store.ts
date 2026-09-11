@@ -258,8 +258,13 @@ export class MemoryStore {
 
   // ─── CRUD ───
 
-  async add(target: "memory" | "user" | "failure", content: string, signal?: AbortSignal): Promise<MemoryResult> {
-    return this.addWithConsolidation(target, content, signal, 1, "Entry added.");
+  async add(
+    target: "memory" | "user" | "failure",
+    content: string,
+    signal?: AbortSignal,
+    options: { keywords?: string[]; project?: string } = {},
+  ): Promise<MemoryResult> {
+    return this.addWithConsolidation(target, content, signal, 1, "Entry added.", options.project, options.keywords);
   }
 
   async addFailure(content: string, options: {
@@ -268,11 +273,12 @@ export class MemoryStore {
     toolState?: string;
     correctedTo?: string;
     project?: string;
+    keywords?: string[];
     signal?: AbortSignal;
   }): Promise<MemoryResult> {
     const failureText = this.buildFailureMemoryText(content, options);
     return this.addWithConsolidation(
-      "failure", failureText, options.signal, 1, "Failure memory saved: " + options.category, options.project,
+      "failure", failureText, options.signal, 1, "Failure memory saved: " + options.category, options.project, options.keywords,
     );
   }
 
@@ -295,6 +301,7 @@ export class MemoryStore {
     signal: AbortSignal | undefined,
     addedMessage: string,
     project: string | undefined,
+    keywords: string[] | undefined,
     markMutation: () => void,
   ): Promise<MemoryResult> {
     content = content.trim();
@@ -320,7 +327,7 @@ export class MemoryStore {
 
     // Encode metadata: both dates = today
     const today = new Date().toISOString().split("T")[0];
-    const encoded = this.encodeEntry(content, today, today, project);
+    const encoded = this.encodeEntry(content, today, today, project, keywords);
 
     const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
     if (this.capEnforced && newTotal > limit) {
@@ -351,10 +358,11 @@ export class MemoryStore {
     retriesLeft: number,
     addedMessage: string,
     project?: string,
+    keywords?: string[],
   ): Promise<MemoryResult> {
     const result = await this.runTargetMutation(
       target,
-      (markMutation) => this._add(target, content, signal, addedMessage, project, markMutation),
+      (markMutation) => this._add(target, content, signal, addedMessage, project, keywords, markMutation),
       signal,
     );
     if (
@@ -399,7 +407,7 @@ export class MemoryStore {
       return { ...result, error: `${result.error} Auto-consolidation succeeded but reloading memory failed: ${String(err).slice(0, 200)}` };
     }
 
-    const retried = await this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project);
+    const retried = await this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project, keywords);
     if (retried.success || !retried.error?.startsWith("Memory at ")) return retried;
     return { ...retried, error: `${retried.error} Auto-consolidation ran but did not free enough space.` };
   }
@@ -487,7 +495,7 @@ export class MemoryStore {
           })) {
             return { success: false, error: "Memory mutation plan would add a duplicate entry." };
           }
-          plannedEntries.push(this.encodeEntry(normalizedContent, today, today, operation.project));
+          plannedEntries.push(this.encodeEntry(normalizedContent, today, today, operation.project, operation.keywords));
           continue;
         }
 
@@ -513,7 +521,7 @@ export class MemoryStore {
         if (replacementError) return { success: false, error: replacementError };
         const replacements = new Map(matches.map((entry) => {
           const decoded = this.decodeEntry(entry);
-          return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined)];
+          return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined, decoded.keywords)];
         }));
         plannedEntries = plannedEntries.map((entry) => replacements.get(entry) ?? entry);
       }
@@ -581,7 +589,7 @@ export class MemoryStore {
     const today = new Date().toISOString().split("T")[0];
     const replacements = new Map(matches.map((entry) => {
       const decoded = this.decodeEntry(entry);
-      return [entry, this.encodeEntry(newContent, decoded.created, today, decoded.project ?? undefined)];
+      return [entry, this.encodeEntry(newContent, decoded.created, today, decoded.project ?? undefined, decoded.keywords)];
     }));
     const testEntries = entries.map((entry) => replacements.get(entry) ?? entry);
 
@@ -699,29 +707,46 @@ export class MemoryStore {
    * Encode metadata (created, lastReferenced) as an HTML comment appended to entry text.
    * The comment is invisible in markdown and transparent to the § delimiter.
    */
-  private encodeEntry(text: string, created: string, lastReferenced: string, project?: string): string {
+  private encodeEntry(text: string, created: string, lastReferenced: string, project?: string, keywords?: string[] | null): string {
     const projectMetadata = project?.trim()
       ? `, project64=${Buffer.from(project.trim(), "utf-8").toString("base64url")}`
       : "";
-    return `${text} <!-- created=${created}, last=${lastReferenced}${projectMetadata} -->`;
+    // keywords round-trip through the metadata regex, which splits keys= on
+    // ", " and stops at the closing "-->" (no ">" allowed); a comma inside a
+    // keyword would split it apart, so both are excluded from stored keys.
+    const cleanedKeywords = (keywords ?? []).map((item) => item.trim()).filter(Boolean)
+      .filter((item) => !/[>,]/.test(item) && !item.includes("project64="));
+    const keysMetadata = cleanedKeywords.length > 0
+      ? `, keys=${cleanedKeywords.join(", ")}`
+      : "";
+    return `${text} <!-- created=${created}, last=${lastReferenced}${keysMetadata}${projectMetadata} -->`;
   }
 
   /**
    * Decode entry text, extracting metadata if present.
    * Falls back to today's date for legacy entries without metadata.
    */
-  private decodeEntry(raw: string): { text: string; created: string; lastReferenced: string; project: string | null } {
-    const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+)(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/s);
+  private decodeEntry(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null } {
+    const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/s);
     if (match) {
       let project: string | null = null;
-      if (match[4]) {
-        try { project = Buffer.from(match[4], "base64url").toString("utf-8").trim() || null; } catch {}
+      if (match[5]) {
+        try { project = Buffer.from(match[5], "base64url").toString("utf-8").trim() || null; } catch {}
       }
-      return { text: match[1].trim(), created: match[2].trim(), lastReferenced: match[3].trim(), project };
+      const keywords = match[4]
+        ? match[4].split(/,\s*/).map((item) => item.trim()).filter(Boolean)
+        : null;
+      return {
+        text: match[1].trim(),
+        created: match[2].trim(),
+        lastReferenced: match[3].trim(),
+        project,
+        keywords: keywords && keywords.length > 0 ? keywords : null,
+      };
     }
     // Legacy entry without metadata — use today as default
     const today = new Date().toISOString().split("T")[0];
-    return { text: raw.trim(), created: today, lastReferenced: today, project: null };
+    return { text: raw.trim(), created: today, lastReferenced: today, project: null, keywords: null };
   }
 
   /** Strip metadata comment from entry text for display. */

@@ -20,6 +20,7 @@ const MEMORY_SELECT_COLUMNS = `
   target,
   category,
   content,
+  keywords,
   failure_reason,
   tool_state,
   corrected_to,
@@ -52,6 +53,8 @@ export interface SqliteMemoryEntry {
   target: 'memory' | 'user' | 'failure';
   category: MemoryCategory | null;
   content: string;
+  /** Search synonyms / equivalents / inflections, parsed from the keywords column. */
+  keywords: string[] | null;
   failureReason: string | null;
   toolState: string | null;
   correctedTo: string | null;
@@ -64,6 +67,7 @@ export interface SqliteMemorySyncInput {
   target: 'memory' | 'user' | 'failure';
   project?: string | null;
   category?: MemoryCategory | null;
+  keywords?: string[] | null;
   failureReason?: string | null;
   toolState?: string | null;
   correctedTo?: string | null;
@@ -154,12 +158,32 @@ function normalizeCategory(value?: MemoryCategory | null): MemoryCategory | null
   return value ?? null;
 }
 
+/** Parse the JSON-encoded keywords column (NULL/empty -> null). */
+function parseKeywords(value: string | null): string[] | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      const cleaned = parsed.map((item) => item.trim()).filter(Boolean);
+      return cleaned.length > 0 ? cleaned : null;
+    }
+  } catch { /* not JSON — treat as absent */ }
+  return null;
+}
+
+/** Serialize the keywords list for the JSON-encoded TEXT column. */
+function serializeKeywords(keywords: string[] | null | undefined): string | null {
+  const cleaned = (keywords ?? []).map((item) => item.trim()).filter(Boolean);
+  return cleaned.length > 0 ? JSON.stringify(cleaned) : null;
+}
+
 function mapRow(row: {
   id: number;
   project: string | null;
   target: string;
   category: string | null;
   content: string;
+  keywords: string | null;
   failure_reason: string | null;
   tool_state: string | null;
   corrected_to: string | null;
@@ -172,6 +196,7 @@ function mapRow(row: {
     target: row.target as 'memory' | 'user' | 'failure',
     category: row.category as MemoryCategory | null,
     content: row.content,
+    keywords: parseKeywords(row.keywords),
     failureReason: row.failure_reason,
     toolState: row.tool_state,
     correctedTo: row.corrected_to,
@@ -236,6 +261,7 @@ function getMemoryById(dbManager: DatabaseManager, id: number): SqliteMemoryEntr
     target: string;
     category: string | null;
     content: string;
+    keywords: string | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -274,7 +300,10 @@ export function formatMarkdownMemoryEntry(entry: SqliteMemoryEntry): string {
   const projectMetadata = entry.project?.trim()
     ? `, project64=${Buffer.from(entry.project.trim(), "utf-8").toString("base64url")}`
     : "";
-  return `${entry.content} <!-- created=${entry.created}, last=${entry.lastReferenced}${projectMetadata} -->`;
+  const keysMetadata = entry.keywords && entry.keywords.length > 0
+    ? `, keys=${entry.keywords.join(", ")}`
+    : "";
+  return `${entry.content} <!-- created=${entry.created}, last=${entry.lastReferenced}${keysMetadata}${projectMetadata} -->`;
 }
 
 /**
@@ -309,6 +338,7 @@ export function loadMemoryScopeEntries(
     target: string;
     category: string | null;
     content: string;
+    keywords: string | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -317,18 +347,22 @@ export function loadMemoryScopeEntries(
   }>;
   return rows.map((row) => formatMarkdownMemoryEntry(mapRow(row)));
 }
-function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null } {
-  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+)(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/);
+function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null } {
+  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/);
   if (match) {
     let project: string | null = null;
-    if (match[4]) {
-      try { project = Buffer.from(match[4], 'base64url').toString('utf-8').trim() || null; } catch {}
+    if (match[5]) {
+      try { project = Buffer.from(match[5], 'base64url').toString('utf-8').trim() || null; } catch {}
     }
+    const keywords = match[4]
+      ? match[4].split(/,\s*/).map((item) => item.trim()).filter(Boolean)
+      : null;
     return {
       text: match[1].trim(),
       created: match[2].trim(),
       lastReferenced: match[3].trim(),
       project,
+      keywords: keywords && keywords.length > 0 ? keywords : null,
     };
   }
 
@@ -338,6 +372,7 @@ function parseMetadataComment(raw: string): { text: string; created: string; las
     created: fallback,
     lastReferenced: fallback,
     project: null,
+    keywords: null,
   };
 }
 
@@ -354,14 +389,15 @@ export function addMemory(
   toolState: string | null = null,
   correctedTo: string | null = null,
   created = today(),
-  lastReferenced = created
+  lastReferenced = created,
+  keywords: string[] | null = null,
 ): SqliteMemoryEntry {
   const db = dbManager.getDb();
 
   const result = db.prepare(`
-    INSERT INTO memories (project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(project, target, category, content, failureReason, toolState, correctedTo, created, lastReferenced);
+    INSERT INTO memories (project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(project, target, category, content, serializeKeywords(keywords), failureReason, toolState, correctedTo, created, lastReferenced);
 
   return {
     id: Number(result.lastInsertRowid),
@@ -369,6 +405,7 @@ export function addMemory(
     target,
     category,
     content,
+    keywords: keywords && keywords.length > 0 ? keywords : null,
     failureReason,
     toolState,
     correctedTo,
@@ -409,7 +446,7 @@ export function parseMarkdownMemoryEntry(
   project: string | null = null,
 ): ParsedMarkdownMemoryEntry {
   const metadata = parseMetadataComment(rawEntry);
-  const { text, created, lastReferenced } = metadata;
+  const { text, created, lastReferenced, keywords } = metadata;
   const parsedProject = normalizeNullable(project);
 
   if (target !== 'failure') {
@@ -417,6 +454,7 @@ export function parseMarkdownMemoryEntry(
       content: text,
       target,
       project: parsedProject,
+      keywords,
       created,
       lastReferenced,
     };
@@ -452,6 +490,7 @@ export function parseMarkdownMemoryEntry(
     target: 'failure',
     project: parsedProject,
     category,
+    keywords,
     failureReason,
     toolState,
     correctedTo,
@@ -472,6 +511,9 @@ export function syncMemoryEntry(
   const content = input.content.trim();
   const project = normalizeNullable(input.project);
   const category = normalizeCategory(input.category);
+  const keywords = input.keywords && input.keywords.length > 0
+    ? input.keywords.map((item) => item.trim()).filter(Boolean)
+    : null;
   const failureReason = normalizeNullable(input.failureReason);
   const toolState = normalizeNullable(input.toolState);
   const correctedTo = normalizeNullable(input.correctedTo);
@@ -495,6 +537,7 @@ export function syncMemoryEntry(
     target: string;
     category: string | null;
     content: string;
+    keywords: string | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -516,6 +559,7 @@ export function syncMemoryEntry(
         correctedTo,
         created,
         lastReferenced,
+        keywords,
       ),
     };
   }
@@ -523,16 +567,20 @@ export function syncMemoryEntry(
   const updatedCreated = minDate(existing.created, created);
   const updatedLastReferenced = maxDate(existing.last_referenced, lastReferenced);
   const updatedCategory = (existing.category as MemoryCategory | null) ?? category;
+  const updatedKeywords = keywords !== null
+    ? serializeKeywords(keywords)
+    : existing.keywords;
   const updatedFailureReason = existing.failure_reason ?? failureReason;
   const updatedToolState = existing.tool_state ?? toolState;
   const updatedCorrectedTo = existing.corrected_to ?? correctedTo;
 
   db.prepare(`
     UPDATE memories
-    SET category = ?, failure_reason = ?, tool_state = ?, corrected_to = ?, created = ?, last_referenced = ?
+    SET category = ?, keywords = ?, failure_reason = ?, tool_state = ?, corrected_to = ?, created = ?, last_referenced = ?
     WHERE id = ?
   `).run(
     updatedCategory,
+    updatedKeywords,
     updatedFailureReason,
     updatedToolState,
     updatedCorrectedTo,
@@ -768,6 +816,7 @@ export function replaceSyncedMemories(
     target: string;
     category: string | null;
     content: string;
+    keywords: string | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -950,6 +999,7 @@ export function searchMemories(
         target: string;
         category: string | null;
         content: string;
+        keywords: string | null;
         failure_reason: string | null;
         tool_state: string | null;
         corrected_to: string | null;
@@ -972,8 +1022,9 @@ export function searchMemories(
   // Use a scoped literal fallback only for those terms so FTS operators and
   // normal tokenized searches retain their existing semantics.
   const runShortCjkFallback = (): SqliteMemoryEntry[] => {
-    const conditions: string[] = ["m.content LIKE ? ESCAPE '\\'"];
-    const params: unknown[] = [`%${escapeLikePattern(query.trim())}%`];
+    const conditions: string[] = ["(m.content LIKE ? ESCAPE '\\' OR m.keywords LIKE ? ESCAPE '\\')"];
+    const likeTerm = `%${escapeLikePattern(query.trim())}%`;
+    const params: unknown[] = [likeTerm, likeTerm];
 
     if (project !== undefined) {
       if (project === null) {
@@ -1002,6 +1053,7 @@ export function searchMemories(
       target: string;
       category: string | null;
       content: string;
+      keywords: string | null;
       failure_reason: string | null;
       tool_state: string | null;
       corrected_to: string | null;
@@ -1020,9 +1072,12 @@ export function searchMemories(
     if (terms.length === 0) return [];
 
     const conditions: string[] = [
-      `(${terms.map(() => "m.content LIKE ? ESCAPE '\\'").join(' OR ')})`,
+      `(${terms.map(() => "(m.content LIKE ? ESCAPE '\\' OR m.keywords LIKE ? ESCAPE '\\')").join(' OR ')})`,
     ];
-    const params: unknown[] = terms.map((term) => `%${escapeLikePattern(term.trim())}%`);
+    const params: unknown[] = terms.flatMap((term) => {
+      const likeTerm = `%${escapeLikePattern(term.trim())}%`;
+      return [likeTerm, likeTerm];
+    });
 
     if (project !== undefined) {
       if (project === null) {
@@ -1053,6 +1108,7 @@ export function searchMemories(
       target: string;
       category: string | null;
       content: string;
+      keywords: string | null;
       failure_reason: string | null;
       tool_state: string | null;
       corrected_to: string | null;
@@ -1148,6 +1204,7 @@ export function getMemories(
     target: string;
     category: string | null;
     content: string;
+    keywords: string | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -1204,6 +1261,7 @@ export function getRecentFailures(
     target: string;
     category: string | null;
     content: string;
+    keywords: string | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;

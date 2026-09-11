@@ -872,7 +872,7 @@ describe('DatabaseManager', () => {
 
       assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'rebuilt');
       assert.deepStrictEqual(dbManager.getLastRecovery()?.recoveredRows, {
-        extension_metadata: 1,
+        extension_metadata: 2, // fts5_tokenizer_version + fts5_keywords_version markers
         sessions: 1,
         messages: 50,
         session_files: 0,

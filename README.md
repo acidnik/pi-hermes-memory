@@ -176,6 +176,9 @@ The extension stores memory at two levels:
 
 By default, full Markdown memories are **not** injected into the system prompt. The system prompt gets a full-detail `<memory-policy>` that tells the agent when to call `memory_search` and how to treat memory results. This keeps first-turn token usage low while preserving access to user, project, failure, correction, insight, preference, convention, and tool-quirk memories.
 
+Saved facts can carry **keywords** — synonyms, equivalents in other languages (e.g. RU↔EN), and inflections (index → indices, индексация) — extracted automatically by review/flush/correction or passed explicitly to `memory_add`. `memory_search` matches both the entry text and its keywords, so a fact stored as "indexing" is still found by a later "indices" or "индекс" query.
+
+
 ```
 System Prompt
 ┌─────────────────────────────────────────┐

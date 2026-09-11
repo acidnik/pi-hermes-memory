@@ -221,6 +221,8 @@ export const COMBINED_REVIEW_PROMPT = `Review the conversation above and conside
 
 For failures, include: what was tried, why it failed, what error occurred, and what worked instead.
 
+**Keywords**: For every fact you save, add searchable keywords — synonyms and equivalents of the subject, including other languages (RU↔EN) and inflections (index → indices, индексация). This lets memory_search find the fact by later mentions in any form.
+
 **Skills**: Do NOT create or modify skills in this background review. Procedural skills are managed explicitly by the main agent through the skill_manage tool during normal work, not by this review subprocess.
 
 Only act if there's something genuinely worth saving. If nothing stands out, just say 'Nothing to save.' and stop.`;
@@ -253,6 +255,8 @@ export const DIRECT_REVIEW_SYSTEM_PROMPT = `You review coding conversations and 
 Review these aspects:
 - **Memory**: User persona, preferences, expectations about how the agent should behave, work style.
 - **Failures & Corrections**: What failed, user corrections, insights, conventions, tool quirks.
+
+For every saved fact, provide **keywords**: searchable synonyms and equivalents of the subject (other languages, e.g. RU↔EN, technical terms, and inflections like index → indices/индекс). Keywords make the memory findable by later mentions in any form — see the keywords field below.
 
 Do NOT create or modify skills. Only save genuinely durable facts — not task progress, session outcomes, or temporary state.
 
@@ -292,6 +296,8 @@ Priority:
 3. Environment fact the agent got wrong
 
 If this contradicts an existing entry, use a "replace" operation to update it instead of "add".
+
+For every saved fact, include searchable **keywords** — synonyms and equivalents of the subject (other languages such as RU↔EN, technical terms, inflections) so the memory stays findable by later mentions in any form.
 
 ${DIRECT_MEMORY_OPERATIONS_SCHEMA}
 

@@ -78,6 +78,8 @@ export const FTS5_MIGRATION_MAX_LOCK_ATTEMPTS = 3;
 
 const FTS5_TOKENIZER_VERSION_KEY = 'fts5_tokenizer_version';
 const FTS5_TOKENIZER_VERSION = 'trigram-v1';
+const FTS5_KEYWORDS_VERSION_KEY = 'fts5_keywords_version';
+const FTS5_KEYWORDS_VERSION = 'keywords-v1';
 const FTS5_TRIGRAM_TABLES = {
   message: `CREATE VIRTUAL TABLE message_fts USING fts5(
     content,
@@ -87,6 +89,7 @@ const FTS5_TRIGRAM_TABLES = {
   )`,
   memory: `CREATE VIRTUAL TABLE memory_fts USING fts5(
     content,
+    keywords,
     content='memories',
     content_rowid='id',
     tokenize='trigram'
@@ -399,6 +402,12 @@ export class DatabaseManager {
     // Recreate indexes after any legacy table replacement. `DROP TABLE`
     // removes indexes attached to the old memories table.
     this.ensureMemoryIndexes(db);
+    // The keywords migration must run FIRST: it owns the memory_fts table
+    // (dropping and recreating it with the keywords column and matching
+    // triggers), while the tokenizer migration below rebuilds both FTS tables
+    // from the shared DDL. Running them in this order keeps every upgrade path
+    // (fresh DB, pre-trigram, post-trigram) on the same two-column memory index.
+    this.migrateMemoryFtsKeywords(db);
     this.migrateFtsTokenizer(db);
   }
 
@@ -947,6 +956,9 @@ export class DatabaseManager {
     if (!names.has('corrected_to')) {
       db.exec('ALTER TABLE memories ADD COLUMN corrected_to TEXT');
     }
+    if (!names.has('keywords')) {
+      db.exec('ALTER TABLE memories ADD COLUMN keywords TEXT');
+    }
   }
 
   private ensureSessionsColumns(db: DatabaseLike): void {
@@ -1011,6 +1023,7 @@ export class DatabaseManager {
             target TEXT NOT NULL CHECK (target IN ('memory', 'user', 'failure')),
             category TEXT CHECK (category IN ('failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk')),
             content TEXT NOT NULL,
+            keywords TEXT,
             failure_reason TEXT,
             tool_state TEXT,
             corrected_to TEXT,
@@ -1020,8 +1033,8 @@ export class DatabaseManager {
         `);
 
         db.exec(`
-          INSERT INTO memories_new (id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced)
-          SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced
+          INSERT INTO memories_new (id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced)
+          SELECT id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced
           FROM memories;
         `);
 
@@ -1045,6 +1058,7 @@ export class DatabaseManager {
           target TEXT NOT NULL CHECK (target IN ('memory', 'user', 'failure')),
           category TEXT CHECK (category IN ('failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk')),
           content TEXT NOT NULL,
+          keywords TEXT,
           failure_reason TEXT,
           tool_state TEXT,
           corrected_to TEXT,
@@ -1054,8 +1068,8 @@ export class DatabaseManager {
       `);
 
       db.exec(`
-          INSERT INTO memories_new (id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced)
-          SELECT id, project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced
+          INSERT INTO memories_new (id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced)
+          SELECT id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced
           FROM memories;
         `);
 
@@ -1068,6 +1082,90 @@ export class DatabaseManager {
       tx();
     } finally {
       db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+
+  /**
+   * Add the `keywords` column to the memory FTS index (Task: keyword
+   * synonyms / equivalents / inflections become searchable).
+   *
+   * FTS5 cannot ALTER an existing virtual table, so the memory_fts index is
+   * dropped and recreated with the second column together with its triggers,
+   * then repopulated from the memories table. The `memories.keywords` column
+   * itself is added by ensureMemoriesColumns() before this runs. The marker
+   * makes the migration versioned and idempotent; it runs BEFORE the
+   * tokenizer migration, which rebuilds the same table from the shared DDL.
+   */
+  private migrateMemoryFtsKeywords(db: DatabaseLike): void {
+    const hasKeywordsColumn = (tableName: string): boolean => this.getColumnNames(db, tableName).has('keywords');
+    const migrationComplete = (): boolean => {
+      const versionRow = db.prepare(
+        'SELECT value FROM extension_metadata WHERE key = ?',
+      ).get(FTS5_KEYWORDS_VERSION_KEY) as { value?: string } | undefined;
+      return versionRow?.value === FTS5_KEYWORDS_VERSION
+        && hasKeywordsColumn('memory_fts');
+    };
+    const isBusy = (error: unknown): boolean => {
+      const code = error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : '';
+      return code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED');
+    };
+
+    let lockAttempts = 0;
+    while (!migrationComplete()) {
+      try {
+        db.exec('BEGIN IMMEDIATE');
+      } catch (error) {
+        if (isBusy(error) && ++lockAttempts < FTS5_MIGRATION_MAX_LOCK_ATTEMPTS) continue;
+        if (isBusy(error)) {
+          throw new Error(
+            `Timed out waiting for the memory FTS keywords migration lock after ${lockAttempts} attempts. `
+              + "Close the other Pi process and retry.",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+
+      try {
+        if (migrationComplete()) {
+          db.exec('COMMIT');
+          return;
+        }
+        // Recreate the memory index with the keywords column. Triggers live on
+        // the memories table and survive DROP TABLE, so they are recreated
+        // here explicitly — the old single-column triggers cannot fill the
+        // new two-column index.
+        db.exec(`
+          DROP TABLE IF EXISTS memory_fts;
+          DROP TRIGGER IF EXISTS memories_ai;
+          DROP TRIGGER IF EXISTS memories_ad;
+          DROP TRIGGER IF EXISTS memories_au;
+          ${FTS5_TRIGRAM_TABLES.memory};
+          CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+            INSERT INTO memory_fts(rowid, content, keywords) VALUES (new.id, new.content, new.keywords);
+          END;
+          CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+            INSERT INTO memory_fts(memory_fts, rowid, content, keywords) VALUES ('delete', old.id, old.content, old.keywords);
+          END;
+          CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+            INSERT INTO memory_fts(memory_fts, rowid, content, keywords) VALUES ('delete', old.id, old.content, old.keywords);
+            INSERT INTO memory_fts(rowid, content, keywords) VALUES (new.id, new.content, new.keywords);
+          END;
+          INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');
+        `);
+        db.prepare(`
+          INSERT INTO extension_metadata (key, value)
+          VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).run(FTS5_KEYWORDS_VERSION_KEY, FTS5_KEYWORDS_VERSION);
+        db.exec('COMMIT');
+        return;
+      } catch (error) {
+        try { db.exec('ROLLBACK'); } catch { /* preserve migration error */ }
+        throw error;
+      }
     }
   }
 
