@@ -187,6 +187,27 @@ describe("loadConfig", () => {
     assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, true);
   });
 
+  it("parses the optional autoRetrieve block and ignores invalid values", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    // Absent -> disabled.
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ reviewEnabled: false }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).autoRetrieve, undefined);
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ autoRetrieve: { enabled: true } }));
+    assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).autoRetrieve, { enabled: true });
+
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ autoRetrieve: {
+      enabled: true, topK: 5, maxChars: 900, minQueryChars: 8, targets: ["memory", "failure"],
+    } }));
+    assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).autoRetrieve, {
+      enabled: true, topK: 5, maxChars: 900, minQueryChars: 8, targets: ["memory", "failure"],
+    });
+
+    // Non-boolean/non-array values are ignored, empty config stays disabled.
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ autoRetrieve: { enabled: "yes", topK: "3", targets: ["bogus"] } }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).autoRetrieve, undefined);
+  });
+
   it("merges array-form override tails with explicit llmFallbackModels", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({

@@ -17,6 +17,28 @@ export interface SessionSearchConfig {
   variant: SessionSearchVariant;
 }
 
+export type AutoRetrieveTarget = "memory" | "user" | "failure";
+
+/**
+ * Optional FTS5 auto-retrieval: before each user message, cheaply search
+ * memories and append the top-K matches after the user text (not in the
+ * system prompt) so the LLM prefix cache stays intact. Each memory entry is
+ * injected at most once per session (persisted in `retrieved_memories`),
+ * reset after context compaction and on session quit.
+ */
+export interface AutoRetrieveConfig {
+  /** Enables the behavior. Default: false (off) */
+  enabled?: boolean;
+  /** Maximum number of memories appended per message. Default: 3 */
+  topK?: number;
+  /** Maximum total characters of the appended block. Default: 1500 */
+  maxChars?: number;
+  /** Which targets to search. Default: all (memory, user, failure) */
+  targets?: AutoRetrieveTarget[];
+  /** Minimum query length before retrieval runs. Default: 12 */
+  minQueryChars?: number;
+}
+
 export interface MemoryConfig {
   /** Defer policy-only memory initialization until first use. Default: false */
   lazyInitialization?: boolean;
@@ -66,6 +88,8 @@ export interface MemoryConfig {
   projectsMemoryDir?: string;
   /** Session search configuration. Default: { variant: "legacy" } */
   sessionSearch?: SessionSearchConfig;
+  /** Auto-retrieval of memories before user messages. Default: disabled */
+  autoRetrieve?: AutoRetrieveConfig;
   /** Run a full SQLite quick_check asynchronously after opening. Default: true */
   quickCheckOnOpen?: boolean;
   /** Override model used for child pi -p subprocess LLM calls. Default: unset */
