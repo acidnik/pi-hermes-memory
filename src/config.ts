@@ -180,6 +180,20 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         }
         if (Object.keys(autoRetrieve).length > 0) config.autoRetrieve = autoRetrieve;
       }
+      if (typeof parsed.bashRetrieve === "object" && parsed.bashRetrieve !== null) {
+        const raw = parsed.bashRetrieve as Record<string, unknown>;
+        const bashRetrieve: NonNullable<MemoryConfig["bashRetrieve"]> = {};
+        if (typeof raw.enabled === "boolean") bashRetrieve.enabled = raw.enabled;
+        if (typeof raw.topK === "number") bashRetrieve.topK = raw.topK;
+        if (typeof raw.maxChars === "number") bashRetrieve.maxChars = raw.maxChars;
+        if (typeof raw.minTerms === "number") bashRetrieve.minTerms = raw.minTerms;
+        if (Array.isArray(raw.targets)
+          && raw.targets.length > 0
+          && raw.targets.every((t) => t === "memory" || t === "user" || t === "failure")) {
+          bashRetrieve.targets = raw.targets as AutoRetrieveTarget[];
+        }
+        if (Object.keys(bashRetrieve).length > 0) config.bashRetrieve = bashRetrieve;
+      }
       if (typeof parsed.quickCheckOnOpen === "boolean") config.quickCheckOnOpen = parsed.quickCheckOnOpen;
       if (typeof parsed.llmModelOverride === "string") {
         const trimmed = parsed.llmModelOverride.trim();

@@ -48,6 +48,7 @@ import { registerSwitchProjectCommand } from "./handlers/switch-project.js";
 import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
 import { setupAutoRetrieve, pruneAutoRetrievalRows } from "./handlers/auto-retrieve.js";
+import { setupBashRetrieve } from "./handlers/bash-retrieve.js";
 import { migrateThenSyncMarkdownMemories, registerSyncMarkdownMemoriesCommand } from "./handlers/sync-markdown-memories.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
 import { registerStandingPinCommand } from "./handlers/standing-pin.js";
@@ -393,6 +394,14 @@ export default function (pi: ExtensionAPI) {
   // The startup prune runs once the database is ready; in lazy mode retrieval
   // itself waits for initialization via the isReady guard.
   setupAutoRetrieve(pi, config, {
+    dbManager,
+    isReady: lazy ? () => initialization.isReady() : undefined,
+    bindProjectFromCwd,
+    resolveProjectName: projectNameRef,
+  });
+  // Memory retrieval on bash tool calls (opt-in, off by default): append the
+  // top memory matches for a command's terms right after the tool output.
+  setupBashRetrieve(pi, config, {
     dbManager,
     isReady: lazy ? () => initialization.isReady() : undefined,
     bindProjectFromCwd,
