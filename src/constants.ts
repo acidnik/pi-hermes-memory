@@ -7,6 +7,11 @@
 // ─── Entry delimiter (same as Hermes) ───
 export const ENTRY_DELIMITER = "\n§\n";
 
+// ─── Auto-retrieval defaults (Task 1) ───
+export const DEFAULT_AUTO_RETRIEVE_TOP_K = 3;
+export const DEFAULT_AUTO_RETRIEVE_MAX_CHARS = 1500;
+export const DEFAULT_AUTO_RETRIEVE_MIN_QUERY_CHARS = 12;
+
 // ─── Directory names ───
 export const DEFAULT_PROJECTS_MEMORY_DIR = "projects-memory";
 

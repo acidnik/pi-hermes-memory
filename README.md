@@ -526,6 +526,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "memoryDir": "~/.pi/agent/pi-hermes-memory",
   "projectsMemoryDir": "projects-memory",
   "sessionSearch": { "variant": "legacy" },
+  "autoRetrieve": { "enabled": true, "topK": 3, "maxChars": 1500 },
   "sessionRetentionDays": 0,
   "quickCheckOnOpen": true,
   "llmModelOverride": "openrouter/deepseek/deepseek-v4-flash",
@@ -567,6 +568,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryDir` | `~/.pi/agent/pi-hermes-memory` | Custom directory for extension storage files |
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
+| `autoRetrieve` | disabled | Opt-in memory retrieval before each user message: FTS5-search the message and append top matches after the user text (cache-safe). Keys: `enabled` (bool), `topK` (default 3), `maxChars` (default 1500), `targets` (default all of memory/user/failure), `minQueryChars` (default 12). Each row is injected at most once per session (persisted dedup, reset after compaction and on session quit); the TUI shows a collapsible widget (`ctrl+o` toggles full content) |
 | `sessionRetentionDays` | `0` | Opt-in SQLite session retention, in days. `0` (default) disables pruning entirely and keeps the legacy count-only backfill preflight. When positive, sessions whose JSONL source file was last modified longer ago than the window are pruned from SQLite at startup — **rows only; the JSONL files in `~/.pi/agent/sessions/` are never deleted** — and both the deferred backfill and `/memory-index-sessions` skip files outside the window, so pruned sessions stay pruned instead of being re-indexed |
 | `quickCheckOnOpen` | `true` | Run a full SQLite integrity check asynchronously after opening the database; set to `false` to skip the startup scan (operation-time recovery remains enabled) |
 | `llmModelOverride` | unset | Optional model override for background review (direct and subprocess), correction save, session flush, and consolidation |

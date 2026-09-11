@@ -96,6 +96,17 @@ export const SCHEMA_SQL = `
     tokenize='trigram'
   );
 
+  -- Per-session dedup for auto-retrieved memory injection: a memory row is
+  -- injected into the model context at most once per session (persisted so
+  -- the rule survives process restarts and resumes). Rows are cleared after
+  -- context compaction and when the session quits.
+  CREATE TABLE IF NOT EXISTS retrieved_memories (
+    session_id TEXT NOT NULL,
+    memory_id INTEGER NOT NULL,
+    retrieved_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, memory_id)
+  );
+
   -- Triggers to keep memory_fts in sync with memories table
   CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
     INSERT INTO memory_fts(rowid, content, keywords) VALUES (new.id, new.content, new.keywords);

@@ -47,6 +47,7 @@ import { registerInterviewCommand } from "./handlers/interview.js";
 import { registerSwitchProjectCommand } from "./handlers/switch-project.js";
 import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
+import { setupAutoRetrieve, pruneAutoRetrievalRows } from "./handlers/auto-retrieve.js";
 import { migrateThenSyncMarkdownMemories, registerSyncMarkdownMemoriesCommand } from "./handlers/sync-markdown-memories.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
 import { registerStandingPinCommand } from "./handlers/standing-pin.js";
@@ -252,6 +253,9 @@ export default function (pi: ExtensionAPI) {
       } catch (err) {
         console.warn(`⚠️ Snapshot retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+      // Stale auto-retrieved-memory dedup rows (sessions that crashed without
+      // shutdown) are pruned here, once the database is guaranteed ready.
+      pruneAutoRetrievalRows(dbManager);
       scheduleSessionBackfill(dbManager, sessionsDir, {
         state: backfillState,
         notify: (message, level) => {
@@ -383,6 +387,13 @@ export default function (pi: ExtensionAPI) {
   registerSessionSearchTool(config.sessionSearch?.variant === "anchors" ? pi : memoryPi,
     dbManager, config.sessionSearch ?? { variant: "legacy" });
   registerMemorySearchTool(memoryPi, dbManager);
+  // Auto-retrieval of memories before user messages (opt-in, off by default).
+  // The startup prune runs once the database is ready; in lazy mode retrieval
+  // itself waits for initialization via the isReady guard.
+  setupAutoRetrieve(pi, config, {
+    dbManager,
+    isReady: lazy ? () => initialization.isReady() : undefined,
+  });
   registerIndexSessionsCommand(memoryPi, config);
 
   // ── 12. Auto-index session on shutdown ──

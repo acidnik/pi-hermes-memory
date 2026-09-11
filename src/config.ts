@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { MemoryConfig, MemoryOverflowStrategy, ReviewTransport, SessionSearchVariant, ThinkingLevel } from "./types.js";
+import type { AutoRetrieveTarget, MemoryConfig, MemoryOverflowStrategy, ReviewTransport, SessionSearchVariant, ThinkingLevel } from "./types.js";
 import {
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_MARKDOWN_MIRROR,
@@ -160,12 +160,25 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         const normalizedProjectsMemoryDir = normalizeProjectsMemoryDir(parsed.projectsMemoryDir);
         if (normalizedProjectsMemoryDir) config.projectsMemoryDir = normalizedProjectsMemoryDir;
       }
-      if (
-        typeof parsed.sessionSearch === "object" &&
+      if (typeof parsed.sessionSearch === "object" &&
         parsed.sessionSearch !== null &&
         isSessionSearchVariant(parsed.sessionSearch.variant)
       ) {
         config.sessionSearch = { variant: parsed.sessionSearch.variant };
+      }
+      if (typeof parsed.autoRetrieve === "object" && parsed.autoRetrieve !== null) {
+        const raw = parsed.autoRetrieve as Record<string, unknown>;
+        const autoRetrieve: NonNullable<MemoryConfig["autoRetrieve"]> = {};
+        if (typeof raw.enabled === "boolean") autoRetrieve.enabled = raw.enabled;
+        if (typeof raw.topK === "number") autoRetrieve.topK = raw.topK;
+        if (typeof raw.maxChars === "number") autoRetrieve.maxChars = raw.maxChars;
+        if (typeof raw.minQueryChars === "number") autoRetrieve.minQueryChars = raw.minQueryChars;
+        if (Array.isArray(raw.targets)
+          && raw.targets.length > 0
+          && raw.targets.every((t) => t === "memory" || t === "user" || t === "failure")) {
+          autoRetrieve.targets = raw.targets as AutoRetrieveTarget[];
+        }
+        if (Object.keys(autoRetrieve).length > 0) config.autoRetrieve = autoRetrieve;
       }
       if (typeof parsed.quickCheckOnOpen === "boolean") config.quickCheckOnOpen = parsed.quickCheckOnOpen;
       if (typeof parsed.llmModelOverride === "string") {
