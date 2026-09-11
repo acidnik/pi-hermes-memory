@@ -40,6 +40,19 @@ describe('fts-query', () => {
   });
 
   describe('fallback queries', () => {
+  it("strips edge punctuation from bare terms so 'deploy?' matches 'deploy'", () => {
+    // Interactive messages carry ?.,:! on tokens; FTS5 trigram treats
+    // "deploy?" as a separate sequence that never matches "deploy".
+    assert.strictEqual(
+      normalizeFts5Query("обновил плагин, тест: будет ли запись на deploy?"),
+      '"обновил" "плагин" "тест" "будет" "ли" "запись" "на" "deploy"',
+    );
+    // Quoted phrases keep their punctuation (a deliberate phrase search).
+    assert.strictEqual(normalizeFts5Query('"config.toml" location?'), '"config.toml" "location"');
+    // Terms of only punctuation collapse to nothing.
+    assert.strictEqual(normalizeFts5Query("!!! ??? ..."), "");
+  });
+
     it('builds an OR fallback for multi-term natural language queries', () => {
       const fb = buildFallbackFts5Query('authentication bug fix');
       assert.ok(fb);

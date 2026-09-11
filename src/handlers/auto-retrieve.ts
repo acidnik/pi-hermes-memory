@@ -25,7 +25,8 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text, getKeybindings, type Component } from "@earendil-works/pi-tui";
+import { Text, Container, getKeybindings, type Component } from "@earendil-works/pi-tui";
+import * as piTui from "@earendil-works/pi-tui";
 import { searchMemories, type SqliteMemoryEntry } from "../store/sqlite-memory-store.js";
 import {
   getRetrievedMemoryIds,
@@ -140,6 +141,46 @@ function renderRetrievalBlock(entries: SqliteMemoryEntry[]): string {
   ].join("\n");
 }
 
+/** Interactive transcript block: collapsed count+keywords, expandable via the
+ * standard app.tools.expand key (ctrl+o) AND a left click (MouseRegion, the
+ * same mechanism tool-output blocks use). */
+class RetrievalBlockComponent extends Container {
+  private expanded: boolean;
+
+  constructor(
+    private readonly state: () => { collapsed: string[]; expanded: string[] },
+    initialExpanded: boolean,
+  ) {
+    super();
+    this.expanded = initialExpanded;
+    this.rebuild();
+  }
+
+  private rebuild(): void {
+    this.clear();
+    const text = new Text(
+      (this.expanded ? this.state().expanded : this.state().collapsed).join("\n"),
+      1,
+      0,
+    );
+    // MouseRegion ships in newer pi-tui; fall back to keyboard-only when absent.
+    const MouseRegion = (piTui as { MouseRegion?: unknown }).MouseRegion as
+      | (new (child: Component, onMouse: (event: any) => any) => Component)
+      | undefined;
+    if (typeof MouseRegion === "function") {
+      this.addChild(new MouseRegion(text, (event: any) => {
+        if (event?.type !== "click" || event?.button !== "left") return undefined;
+        this.expanded = !this.expanded;
+        this.rebuild();
+        this.invalidate();
+        return { handled: true };
+      }));
+    } else {
+      this.addChild(text);
+    }
+  }
+}
+
 /** Interactive transcript renderer: collapsed count+keywords, expandable. */
 export function renderRetrievalMessage(
   message: { details?: unknown },
@@ -150,21 +191,16 @@ export function renderRetrievalMessage(
   const entries = Array.isArray(details?.entries) ? details!.entries : [];
   const count = entries.length;
   const label = `${count} ${count === 1 ? "entry" : "entries"}`;
-  const lines: string[] = [];
-
   const header = theme.fg("accent", `🧠 Retrieved ${label}`)
     + (details?.keywords ? theme.fg("muted", `: ${details.keywords}`) : "");
-  lines.push(header);
 
-  if (options.expanded) {
-    for (const entry of entries) {
-      lines.push(`${theme.fg("muted", `- [${scopeLabel(entry)}] `)}${entry.content}`);
-    }
-  } else {
-    lines.push(theme.fg("muted", `   ${expandKeyHint()} to expand`));
-  }
-
-  return new Text(lines.join("\n"), 1, 0);
+  return new RetrievalBlockComponent(
+    () => ({
+      collapsed: [header, theme.fg("muted", `   ${expandKeyHint()} to expand (or click)`),],
+      expanded: [header, "", ...entries.map((entry) => `${theme.fg("muted", `- [${scopeLabel(entry)}] `)}${entry.content}`)],
+    }),
+    options.expanded,
+  );
 }
 
 /** System-style prompts sent by background subprocess sessions (reviews,
