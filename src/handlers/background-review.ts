@@ -38,11 +38,11 @@ function savedActionLine(operation: ReviewMemoryOperation): string {
 
 /** Entry renderer: collapsed "N entries (click/ctrl+o)", expanded lists them. */
 export function renderMemorySavedEntry(
-  entry: { details?: unknown },
+  entry: { data?: unknown },
   options: { expanded: boolean },
   theme: { fg: (color: string, text: string) => string },
 ) {
-  const details = entry.details as SavedMemoryDetails | undefined;
+  const details = entry.data as SavedMemoryDetails | undefined;
   const entries = Array.isArray(details?.entries) ? details.entries : [];
   const count = entries.length;
   const label = `${count} ${count === 1 ? "entry" : "entries"}`;
@@ -270,14 +270,21 @@ export function setupBackgroundReview(
     const notifyIfSaved = (saved: boolean, extractedCount?: number, appliedDetails?: ReviewMemoryOperation[]) => {
       if (sessionCancelled()) return;
       if (!saved) return;
+      const details = appliedDetails && appliedDetails.length > 0 ? appliedDetails : undefined;
+      if (details) {
+        // Direct transport: one clickable block carrying the count and the saved
+        // operations is the feedback — no redundant toast alongside it.
+        if (typeof pi.appendEntry === "function") {
+          try {
+            pi.appendEntry(SAVED_MEMORY_ENTRY_TYPE, { count: details.length, entries: details } satisfies SavedMemoryDetails);
+          } catch { /* best effort */ }
+        }
+        return;
+      }
+      // Subprocess fallback has no clickable block — keep the toast there.
       const count = extractedCount ?? 0;
       const suffix = count > 0 ? ` (${count} new ${count === 1 ? "entry" : "entries"})` : "";
       ctx.ui.notify(`💾 Memory auto-reviewed and updated${suffix}`, "info");
-      if (typeof pi.appendEntry === "function" && appliedDetails && appliedDetails.length > 0) {
-        try {
-          pi.appendEntry(SAVED_MEMORY_ENTRY_TYPE, { count, entries: appliedDetails } satisfies SavedMemoryDetails);
-        } catch { /* best effort */ }
-      }
     };
 
     const notifyTransportFailure = (directFailure: string, subprocessDetail: unknown) => {
