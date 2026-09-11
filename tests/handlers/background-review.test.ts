@@ -750,6 +750,7 @@ describe("setupBackgroundReview", () => {
     assert.match(directOptions.systemPrompt, /do not emit target "project"/i);
     const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
     assert.ok(reviewNotify, "should notify when direct review applies memory");
+    assert.match(reviewNotify.msg, /\(1 new entry\)$/, "notification should report how many facts were extracted");
   });
 
   it("falls back to subprocess when direct review cannot run", async () => {

@@ -228,11 +228,12 @@ export function setupBackgroundReview(
     turnsSinceReview = 0;
     toolCallsSinceReview = 0;
 
-    const notifyIfSaved = (saved: boolean) => {
+    const notifyIfSaved = (saved: boolean, extractedCount?: number) => {
       if (sessionCancelled()) return;
-      if (saved) {
-        ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
-      }
+      if (!saved) return;
+      const count = extractedCount ?? 0;
+      const suffix = count > 0 ? ` (${count} new ${count === 1 ? "entry" : "entries"})` : "";
+      ctx.ui.notify(`💾 Memory auto-reviewed and updated${suffix}`, "info");
     };
 
     const notifyTransportFailure = (directFailure: string, subprocessDetail: unknown) => {
@@ -296,7 +297,7 @@ export function setupBackgroundReview(
           if (sessionCancelled()) return;
 
           if (directResult.ok) {
-            notifyIfSaved(shouldNotifyDirect(directResult));
+            notifyIfSaved(shouldNotifyDirect(directResult), directResult.appliedCount);
             return;
           }
 
