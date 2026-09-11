@@ -10,6 +10,7 @@ import {
 } from './fts-query.js';
 import { normalizeMemoryLookupText } from './memory-lookup.js';
 import { MDSYNC_METADATA_KEY_PREFIX } from '../constants.js';
+import { markRetrievedMemoryIds } from './retrieval-store.js';
 import type { MemoryCategory } from '../types.js';
 
 export { isFts5QueryError };
@@ -374,6 +375,46 @@ function parseMetadataComment(raw: string): { text: string; created: string; las
     project: null,
     keywords: null,
   };
+}
+
+/**
+ * Mark memory rows as already injected for a session, resolving rows by the
+ * written entry texts (exact content match within the scope). Used right
+ * after a memory write so a just-added fact is not immediately re-injected
+ * by auto-retrieval in the same session.
+ */
+export function markMemoryEntriesInjected(
+  dbManager: DatabaseManager,
+  sessionId: string,
+  rawEntries: string[],
+  target: 'memory' | 'user' | 'failure',
+  fallbackProject: string | null = null,
+): void {
+  const db = dbManager.getDb();
+  const ids = new Set<number>();
+  for (const raw of rawEntries) {
+    const metadata = parseMetadataComment(raw);
+    const content = metadata.text.trim();
+    if (!content) continue;
+    // Project-scoped entries carry project64 in the metadata; a passed-in
+    // fallback covers the project-store write path (no project64 yet).
+    const scopeProject = metadata.project ?? fallbackProject;
+    const conditions = ['target = ?', 'content = ?'];
+    const params: unknown[] = [target, content];
+    if (scopeProject === null) conditions.push('project IS NULL');
+    else {
+      conditions.push('project = ?');
+      params.push(scopeProject);
+    }
+    const rows = db.prepare(`
+      SELECT id FROM memories
+      WHERE ${conditions.join(' AND ')}
+    `).all(...params) as Array<{ id: number }>;
+    for (const row of rows) ids.add(Number(row.id));
+  }
+  if (ids.size > 0) {
+    markRetrievedMemoryIds(dbManager, sessionId, ids);
+  }
 }
 
 /**
@@ -933,13 +974,40 @@ export function removeExactSyncedMemories(
   };
 }
 
+/** Builds the project-scope predicate for a multi-scope search (null = global). */
+function buildProjectScopeConditions(
+  params: unknown[],
+  projects: Array<string | null> | undefined,
+  tablePrefix: string,
+): string[] {
+  if (projects === undefined) return [];
+  const conditions: string[] = [];
+  if (projects.some((value) => value === null)) {
+    conditions.push(`${tablePrefix}.project IS NULL`);
+  }
+  const named = projects.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  if (named.length > 0) {
+    conditions.push(`${tablePrefix}.project IN (${named.map(() => "?").join(", ")})`);
+    params.push(...named);
+  }
+  // An explicitly empty scope list matches nothing rather than everything.
+  return [conditions.length > 0 ? `(${conditions.join(" OR ")})` : "0"];
+}
+
 /**
  * Search memories using FTS5.
  */
 export function searchMemories(
   dbManager: DatabaseManager,
   query: string,
-  options: { project?: string; target?: string; category?: MemoryCategory; limit?: number } = {}
+  options: {
+    project?: string;
+    /** Multi-scope search: any of these project values (null = global). */
+    projects?: Array<string | null>;
+    target?: string;
+    category?: MemoryCategory;
+    limit?: number;
+  } = {}
 ): SqliteMemoryEntry[] {
   if (query.trim().length === 0) {
     return [];
@@ -947,6 +1015,11 @@ export function searchMemories(
 
   const db = dbManager.getDb();
   const { project, target, category, limit = 10 } = options;
+  const projectScopes: Array<string | null> | undefined = options.projects !== undefined
+    ? options.projects
+    : project !== undefined
+      ? [project]
+      : undefined;
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -963,14 +1036,7 @@ export function searchMemories(
     conditions.push('memory_fts MATCH ?');
     params.push(matchQuery);
 
-    if (project !== undefined) {
-      if (project === null) {
-        conditions.push('m.project IS NULL');
-      } else {
-        conditions.push('m.project = ?');
-        params.push(project);
-      }
-    }
+    conditions.push(...buildProjectScopeConditions(params, projectScopes, 'm'));
 
     conditions.push(...buildSearchTargetConditions(params, target, 'm'));
 
@@ -1026,14 +1092,7 @@ export function searchMemories(
     const likeTerm = `%${escapeLikePattern(query.trim())}%`;
     const params: unknown[] = [likeTerm, likeTerm];
 
-    if (project !== undefined) {
-      if (project === null) {
-        conditions.push('m.project IS NULL');
-      } else {
-        conditions.push('m.project = ?');
-        params.push(project);
-      }
-    }
+    conditions.push(...buildProjectScopeConditions(params, projectScopes, 'm'));
     conditions.push(...buildSearchTargetConditions(params, target, 'm'));
 
     if (category) {
@@ -1079,14 +1138,7 @@ export function searchMemories(
       return [likeTerm, likeTerm];
     });
 
-    if (project !== undefined) {
-      if (project === null) {
-        conditions.push('m.project IS NULL');
-      } else {
-        conditions.push('m.project = ?');
-        params.push(project);
-      }
-    }
+    conditions.push(...buildProjectScopeConditions(params, projectScopes, 'm'));
     if (target) {
       conditions.push('m.target = ?');
       params.push(target);

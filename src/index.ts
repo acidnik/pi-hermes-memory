@@ -62,6 +62,7 @@ import { AGENT_ROOT } from "./paths.js";
 import { isDatabaseMigrationPending } from "./extension-root-migration.js";
 import { measureLifecycle, measureLifecycleSync } from "./lifecycle-timing.js";
 import { createMemoryInitializer, withMemoryInitialization, type EnsureMemoryReady } from "./memory-initialization.js";
+import { setCurrentSessionId } from "./session-id.js";
 
 export function resolveProjectSkillDiscovery(
   skillStore: SkillStore,
@@ -288,6 +289,7 @@ export default function (pi: ExtensionAPI) {
   // Skills and pinned instructions must be available even without a lookup.
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
+    if (typeof ctx.sessionManager?.getSessionId === "function") setCurrentSessionId(ctx.sessionManager.getSessionId());
     // Pinned directives must not depend on migration/SQLite being healthy.
     if (standingStore) await standingStore.load();
     if (!lazy) await ensureMemoryReady(ctx);
@@ -393,6 +395,8 @@ export default function (pi: ExtensionAPI) {
   setupAutoRetrieve(pi, config, {
     dbManager,
     isReady: lazy ? () => initialization.isReady() : undefined,
+    bindProjectFromCwd,
+    resolveProjectName: projectNameRef,
   });
   registerIndexSessionsCommand(memoryPi, config);
 

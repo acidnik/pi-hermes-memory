@@ -18,9 +18,11 @@ import {
   replaceSyncedMemories,
   syncMemoryEntry,
   loadMemoryScopeEntries,
+  markMemoryEntriesInjected,
   isFts5QueryError,
 } from "../store/sqlite-memory-store.js";
 import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
+import { getCurrentSessionId } from "../session-id.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import type { MemoryCategory, MemoryResult } from "../types.js";
 import { normalizeMemoryLookupText } from "../store/memory-lookup.js";
@@ -341,6 +343,25 @@ export function registerMemoryTool(
       }
       return loadMemoryScopeEntries(dbManager, target, null);
     });
+    if (typeof candidate.setSessionIdProvider === "function") {
+      candidate.setSessionIdProvider(() => getCurrentSessionId());
+    }
+    if (typeof candidate.setInjectedWriter === "function") {
+      // Freshly written facts are marked as already injected for the current
+      // session so auto-retrieval does not immediately re-inject them.
+      candidate.setInjectedWriter((target, rawEntries) => {
+        const sessionId = getCurrentSessionId();
+        if (!sessionId || !dbManager) return;
+        const rawTarget = isProjectStore && target === "memory" ? "project" : target;
+        const sqliteTarget = sqliteTargetFor(rawTarget);
+        const fallbackProject = isProjectStore && target === "memory"
+          ? (resolveProjectName(projectName) || null)
+          : null;
+        try {
+          markMemoryEntriesInjected(dbManager, sessionId, rawEntries, sqliteTarget, fallbackProject);
+        } catch { /* best effort */ }
+      });
+    }
     sqliteWritePathStores.add(candidate);
   };
   const attachMutationObserver = (candidate: MemoryStore | null, isProjectStore = false): void => {

@@ -1,7 +1,20 @@
 /**
- * Optional FTS5 auto-retrieval (Task 1): before each user message, cheaply
- * search memories and append the top-K matches directly after the user text —
- * NOT in the system prompt — so Pi's LLM prefix cache stays intact.
+ * Optional FTS5 auto-retrieval (Task 1).
+ *
+ * Before each user message a cheap FTS5 search runs against the message text,
+ * and the top-K matches are delivered to the model as a **custom message**
+ * appended to the conversation (converted to a user-role text block by Pi).
+ * The user's own message is never modified, so the injection is not glued
+ * into the bubble they typed.
+ *
+ * The same custom message is rendered in the transcript by our
+ * `registerMessageRenderer` component: collapsed by default it shows only the
+ * entry count plus a few keywords, and the standard `app.tools.expand`
+ * (default `ctrl+o`) toggle expands it to the full block — the same
+ * collapsed/expanded behavior tool output (e.g. quick-edit diffs) uses.
+ *
+ * Scope: only the current project's memories plus global (project IS NULL)
+ * ones are retrieved — other projects' facts are never injected.
  *
  * Semantics:
  * - Every memory row is injected **at most once per session** (persisted in
@@ -9,11 +22,10 @@
  * - After context compaction the model has effectively forgotten the injected
  *   facts, so `session_compact` clears the session's dedup and injection can
  *   run once more. On a real session quit the rows are dropped too.
- * - An interactive widget (collapsed: entry count + a few keywords; ctrl+o
- *   toggles to the full block) shows the user what was injected.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text, getKeybindings, type Component } from "@earendil-works/pi-tui";
 import { searchMemories, type SqliteMemoryEntry } from "../store/sqlite-memory-store.js";
 import {
   getRetrievedMemoryIds,
@@ -29,19 +41,34 @@ import {
   DEFAULT_AUTO_RETRIEVE_TOP_K,
 } from "../constants.js";
 
-const RETRIEVAL_WIDGET_KEY = "memory-retrieve";
-const RETRIEVAL_WIDGET_HINT = "ctrl+o";
+export const RETRIEVAL_MESSAGE_TYPE = "memory-retrieval";
+
+const RETRIEVAL_FALLBACK_HINT = "ctrl+o";
 const DEFAULT_TARGETS: readonly AutoRetrieveTarget[] = ["memory", "user", "failure"];
 const RETRIEVAL_PRUNE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-interface LastInjection {
-  collapsed: string[];
-  expanded: string[];
+
+/** Entry shown to the user in the expandable block (serializable into details). */
+interface RetrievalEntryView {
+  target: AutoRetrieveTarget;
+  project: string | null;
+  category: string | null;
+  content: string;
+}
+
+interface RetrievalDetails {
+  count: number;
+  keywords: string;
+  entries: RetrievalEntryView[];
 }
 
 export interface AutoRetrieveOptions {
   dbManager: DatabaseManager | null;
   /** Skip retrieval until true (lazy-initialization guard). */
   isReady?: () => boolean;
+  /** Binds the active project from the prompt cwd (project-scoped search). */
+  bindProjectFromCwd?: (cwd?: string) => void | Promise<void>;
+  /** Resolves the active project name after binding. */
+  resolveProjectName?: () => string;
 }
 
 /** Purge stale dedup rows (sessions that crashed without shutdown). */
@@ -49,29 +76,34 @@ export function pruneAutoRetrievalRows(dbManager: DatabaseManager): void {
   try { pruneRetrievalRows(dbManager, RETRIEVAL_PRUNE_MAX_AGE_MS); } catch { /* best effort */ }
 }
 
-/** System-style prompts sent by background subprocess sessions (reviews,
- * flush/compaction, correction) must never trigger retrieval. */
-function isBackgroundPrompt(text: string): boolean {
-  return text.startsWith("Review the conversation above")
-    || text.startsWith("[System: The session is being compressed")
-    || text.startsWith("[System: Save anything worth")
-    || (text.length > 300 && (text.includes("--- Current Memory ---")
-      || text.includes("--- Conversation to Review ---")));
+/** The key that toggles expanded output (same one tool results use). */
+function expandKeyHint(): string {
+  try {
+    const keybindings = getKeybindings() as unknown as {
+      getKeys?: (keybinding: string) => unknown;
+    };
+    const keys = keybindings?.getKeys?.("app.tools.expand");
+    const first = Array.isArray(keys) ? keys[0] : keys;
+    if (typeof first === "string") return first;
+    const key = (first as { key?: unknown } | undefined)?.key;
+    if (typeof key === "string") return key;
+  } catch { /* fall through */ }
+  return RETRIEVAL_FALLBACK_HINT;
 }
 
-function scopeLabel(entry: { target: AutoRetrieveTarget; project: string | null; category: string | null }): string {
+function scopeLabel(entry: RetrievalEntryView): string {
   if (entry.target === "failure") {
     return entry.category ? `failure:${entry.category}` : "failure";
   }
-  if (entry.target === "memory" && entry.project) return "project";
+  if (entry.target === "memory" && entry.project) return `project:${entry.project}`;
   return entry.target;
 }
 
-function formatLine(entry: SqliteMemoryEntry): string {
-  const content = entry.content.length > 300 ? `${entry.content.slice(0, 300)}…` : entry.content;
-  return `- [${scopeLabel(entry)}] ${content}`;
+function formatLine(entry: RetrievalEntryView): string {
+  return `- [${scopeLabel(entry)}] ${entry.content}`;
 }
 
+/** Keywords shown in the collapsed header — falls back to leading words. */
 function keywordPreview(entries: SqliteMemoryEntry[]): string {
   const words: string[] = [];
   for (const entry of entries) {
@@ -90,17 +122,59 @@ function keywordPreview(entries: SqliteMemoryEntry[]): string {
       }
     }
   }
-  return words.join(", ") || "(no keywords)";
+  return words.join(", ");
 }
 
+/** The text block the model receives (custom message content). */
 function renderRetrievalBlock(entries: SqliteMemoryEntry[]): string {
-  const lines = [
+  return [
     "<retrieved-memory>",
     "The following durable memories match your message:",
-    ...entries.map(formatLine),
+    ...entries.map((entry) => formatLine({
+      target: entry.target,
+      project: entry.project,
+      category: entry.category,
+      content: entry.content.length > 300 ? `${entry.content.slice(0, 300)}…` : entry.content,
+    })),
     "</retrieved-memory>",
-  ];
-  return lines.join("\n");
+  ].join("\n");
+}
+
+/** Interactive transcript renderer: collapsed count+keywords, expandable. */
+export function renderRetrievalMessage(
+  message: { details?: unknown },
+  options: { expanded: boolean },
+  theme: { fg: (color: string, text: string) => string },
+): Component {
+  const details = message.details as RetrievalDetails | undefined;
+  const entries = Array.isArray(details?.entries) ? details!.entries : [];
+  const count = entries.length;
+  const label = `${count} ${count === 1 ? "entry" : "entries"}`;
+  const lines: string[] = [];
+
+  const header = theme.fg("accent", `🧠 Retrieved ${label}`)
+    + (details?.keywords ? theme.fg("muted", `: ${details.keywords}`) : "");
+  lines.push(header);
+
+  if (options.expanded) {
+    for (const entry of entries) {
+      lines.push(`${theme.fg("muted", `- [${scopeLabel(entry)}] `)}${entry.content}`);
+    }
+  } else {
+    lines.push(theme.fg("muted", `   ${expandKeyHint()} to expand`));
+  }
+
+  return new Text(lines.join("\n"), 1, 0);
+}
+
+/** System-style prompts sent by background subprocess sessions (reviews,
+ * flush/compaction, correction) must never trigger retrieval. */
+function isBackgroundPrompt(text: string): boolean {
+  return text.startsWith("Review the conversation above")
+    || text.startsWith("[System: The session is being compressed")
+    || text.startsWith("[System: Save anything worth")
+    || (text.length > 300 && (text.includes("--- Current Memory ---")
+      || text.includes("--- Conversation to Review ---")));
 }
 
 function sessionIdOf(ctx: { sessionManager?: { getSessionId?(): string } }): string | undefined {
@@ -120,30 +194,23 @@ export function setupAutoRetrieve(
   const autoRetrieve = config.autoRetrieve;
   if (!autoRetrieve?.enabled) return;
 
-  const { dbManager, isReady } = options;
+  const { dbManager, isReady, bindProjectFromCwd, resolveProjectName } = options;
   const topK = Math.max(1, autoRetrieve.topK ?? DEFAULT_AUTO_RETRIEVE_TOP_K);
   const maxChars = Math.max(1, autoRetrieve.maxChars ?? DEFAULT_AUTO_RETRIEVE_MAX_CHARS);
   const minQueryChars = Math.max(1, autoRetrieve.minQueryChars ?? DEFAULT_AUTO_RETRIEVE_MIN_QUERY_CHARS);
   const targets: readonly AutoRetrieveTarget[] =
     autoRetrieve.targets && autoRetrieve.targets.length > 0 ? autoRetrieve.targets : DEFAULT_TARGETS;
 
-  // UI state per session (transient — only the dedup rows persist).
-  const lastInjection = new Map<string, LastInjection>();
-  const expandedSessions = new Set<string>();
+  if (typeof pi.registerMessageRenderer === "function") {
+    pi.registerMessageRenderer(RETRIEVAL_MESSAGE_TYPE, renderRetrievalMessage as never);
+  }
 
-  const clearWidget = (ctx: { ui?: unknown }): void => {
-    try {
-      (ctx.ui as { setWidget?: (key: string, content: string[] | undefined) => void })
-        ?.setWidget?.(RETRIEVAL_WIDGET_KEY, undefined);
-    } catch { /* best effort */ }
-  };
-
-  const searchTargets = (query: string): SqliteMemoryEntry[] => {
+  const searchTargets = (query: string, projects: Array<string | null>): SqliteMemoryEntry[] => {
     if (!dbManager) return [];
     const collected: SqliteMemoryEntry[] = [];
     const seen = new Set<number>();
     for (const target of targets) {
-      for (const entry of searchMemories(dbManager, query, { target, limit: topK })) {
+      for (const entry of searchMemories(dbManager, query, { target, projects, limit: topK })) {
         if (seen.has(entry.id)) continue;
         seen.add(entry.id);
         collected.push(entry);
@@ -157,7 +224,7 @@ export function setupAutoRetrieve(
     const picked: SqliteMemoryEntry[] = [];
     let chars = 0;
     for (const entry of entries) {
-      const pushChars = formatLine(entry).length;
+      const pushChars = entry.content.length + 40;
       if (picked.length > 0 && chars + pushChars > maxChars) break;
       picked.push(entry);
       chars += pushChars;
@@ -166,68 +233,58 @@ export function setupAutoRetrieve(
     return picked;
   };
 
-  pi.on("input", async (event, ctx) => {
+  // Injected via before_agent_start: Pi appends the returned custom message
+  // to THIS turn's context right after the user message (the user's own text
+  // is never modified), and our renderer draws it collapsed in the transcript.
+  pi.on("before_agent_start", async (event, ctx) => {
     try {
       if (isReady && !isReady()) return;
-      const text = typeof event.text === "string" ? event.text : "";
-      const trimmed = text.trim();
+      const prompt = typeof (event as { prompt?: string }).prompt === "string"
+        ? (event as { prompt: string }).prompt
+        : "";
+      const trimmed = prompt.trim();
       if (!trimmed || trimmed.startsWith("/")) return;
       if (trimmed.length < minQueryChars) return;
       if (isBackgroundPrompt(trimmed)) return;
       const sessionId = sessionIdOf(ctx as { sessionManager?: { getSessionId?(): string } });
       if (!sessionId || !dbManager) return;
 
+      // Current project + global only: other projects' facts are irrelevant here.
+      await bindProjectFromCwd?.((ctx as { cwd?: string }).cwd);
+      const activeProject = (resolveProjectName?.() ?? "").trim();
+      const projects: Array<string | null> = activeProject ? [null, activeProject] : [null];
+
       const alreadyInjected = getRetrievedMemoryIds(dbManager, sessionId);
-      const fresh = searchTargets(trimmed).filter((entry) => !alreadyInjected.has(entry.id));
+      const fresh = searchTargets(trimmed, projects).filter((entry) => !alreadyInjected.has(entry.id));
       const picked = pickWithinBudget(fresh);
       if (picked.length === 0) return;
 
-      const block = renderRetrievalBlock(picked);
       markRetrievedMemoryIds(dbManager, sessionId, picked.map((entry) => entry.id));
 
-      const noun = picked.length === 1 ? "entry" : "entries";
-      const collapsed = [
-        `🧠 Retrieved ${picked.length} memory ${noun}: ${keywordPreview(picked)}`,
-        `   ${RETRIEVAL_WIDGET_HINT} to expand`,
-      ];
-      const expanded = [
-        `🧠 Retrieved ${picked.length} memory ${noun} (${RETRIEVAL_WIDGET_HINT} to collapse):`,
-        "",
-        ...picked.map(formatLine),
-      ];
-      lastInjection.set(sessionId, { collapsed, expanded });
-      expandedSessions.delete(sessionId);
-      try {
-        (ctx.ui as { setWidget?: (key: string, content: string[] | undefined) => void })
-          ?.setWidget?.(RETRIEVAL_WIDGET_KEY, collapsed);
-      } catch { /* best effort */ }
+      const details: RetrievalDetails = {
+        count: picked.length,
+        keywords: keywordPreview(picked),
+        entries: picked.map((entry) => ({
+          target: entry.target,
+          project: entry.project,
+          category: entry.category,
+          content: entry.content.length > 500 ? `${entry.content.slice(0, 500)}…` : entry.content,
+        })),
+      };
 
-      return { action: "transform", text: `${text}\n\n${block}`, images: event.images };
+      return {
+        message: {
+          customType: RETRIEVAL_MESSAGE_TYPE,
+          content: renderRetrievalBlock(picked),
+          display: true,
+          details,
+        },
+      };
     } catch {
-      // Retrieval must never break the user's prompt; on any error send it
-      // through unchanged.
-      return undefined;
+      // Retrieval must never break the user's prompt.
+      return;
     }
   });
-
-  if (typeof pi.registerShortcut === "function") {
-    pi.registerShortcut("ctrl+o", {
-      description: "Toggle the auto-retrieved memory panel",
-      handler: (ctx) => {
-        const sessionId = sessionIdOf(ctx as { sessionManager?: { getSessionId?(): string } });
-        if (!sessionId) return;
-        const entry = lastInjection.get(sessionId);
-        if (!entry) return;
-        const expanded = !expandedSessions.has(sessionId);
-        if (expanded) expandedSessions.add(sessionId);
-        else expandedSessions.delete(sessionId);
-        try {
-          (ctx.ui as { setWidget?: (key: string, content: string[] | undefined) => void })
-            ?.setWidget?.(RETRIEVAL_WIDGET_KEY, expanded ? entry.expanded : entry.collapsed);
-        } catch { /* best effort */ }
-      },
-    });
-  }
 
   // After compaction the model has lost the injected context; allow the same
   // facts to be injected once more.
@@ -235,17 +292,11 @@ export function setupAutoRetrieve(
     const sessionId = sessionIdOf(ctx as { sessionManager?: { getSessionId?(): string } });
     if (!sessionId || !dbManager) return;
     try { resetSessionRetrievals(dbManager, sessionId); } catch { /* best effort */ }
-    lastInjection.delete(sessionId);
-    expandedSessions.delete(sessionId);
-    clearWidget(ctx as { ui?: unknown });
   });
 
   pi.on("session_shutdown", (event, ctx) => {
     const sessionId = sessionIdOf(ctx as { sessionManager?: { getSessionId?(): string } });
     if (!sessionId || !dbManager) return;
-    lastInjection.delete(sessionId);
-    expandedSessions.delete(sessionId);
-    clearWidget(ctx as { ui?: unknown });
     // Real session end: drop its dedup rows. reload/new/resume/fork keep them
     // so a resumed session continues the "once per session" guarantee.
     if ((event as { reason?: string }).reason === "quit") {
