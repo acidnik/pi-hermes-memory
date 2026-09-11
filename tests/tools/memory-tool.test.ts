@@ -271,7 +271,7 @@ describe("registerMemoryTool", () => {
     );
   });
 
-  it("reconciles SQLite from fresh authoritative Markdown state", async () => {
+  it("merges a newer concurrent SQLite writer after the mirror write", async () => {
     let capturedResult: any;
     const mockPi = {
     registerTool: (definition: any) => {
@@ -299,14 +299,18 @@ describe("registerMemoryTool", () => {
     });
     await store.loadFromDisk();
 
-    const originalSave = (store as any).saveToDisk.bind(store);
-    (store as any).saveToDisk = async (target: "memory") => {
-      await originalSave(target);
+    const originalMirror = (store as any).writeMarkdownMirror.bind(store);
+    (store as any).writeMarkdownMirror = async (target: "memory") => {
+      // Mirror write publishes the authoritative SQLite scope; a concurrent
+      // writer then lands a second row straight into SQLite. The SQLite-primary
+      // finalize step re-loads the scope, so both rows survive.
+      await originalMirror(target);
       const markdownPath = path.join(tmpDir, MEMORY_FILE);
       const existing = fs.readFileSync(markdownPath, "utf-8");
       const date = new Date().toISOString().split("T")[0];
       fs.writeFileSync(markdownPath, `${existing}${ENTRY_DELIMITER}newer writer <!-- created=${date}, last=${date} -->`);
       syncMemoryEntry(dbManager, { content: "newer writer", target: "memory", project: null });
+      return null;
     };
 
     registerMemoryTool(mockPi, store, null, dbManager);

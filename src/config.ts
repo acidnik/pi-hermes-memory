@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { MemoryConfig, MemoryOverflowStrategy, ReviewTransport, SessionSearchVariant, ThinkingLevel } from "./types.js";
 import {
   DEFAULT_MEMORY_CHAR_LIMIT,
+  DEFAULT_MARKDOWN_MIRROR,
   DEFAULT_USER_CHAR_LIMIT,
   DEFAULT_PROJECT_CHAR_LIMIT,
   DEFAULT_PROJECTS_MEMORY_DIR,
@@ -45,6 +46,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   memoryMode: "policy-only",
   memoryPolicyStyle: "full",
   memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
+  markdownMirror: DEFAULT_MARKDOWN_MIRROR,
   userCharLimit: DEFAULT_USER_CHAR_LIMIT,
   projectCharLimit: DEFAULT_PROJECT_CHAR_LIMIT,
   nudgeInterval: DEFAULT_NUDGE_INTERVAL,
@@ -102,6 +104,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       ) config.memoryPolicyStyle = parsed.memoryPolicyStyle;
       if (typeof parsed.memoryPolicyCustomText === "string") config.memoryPolicyCustomText = parsed.memoryPolicyCustomText;
       if (typeof parsed.memoryCharLimit === "number") config.memoryCharLimit = parsed.memoryCharLimit;
+      if (typeof parsed.markdownMirror === "boolean") config.markdownMirror = parsed.markdownMirror;
       if (typeof parsed.userCharLimit === "number") config.userCharLimit = parsed.userCharLimit;
       if (typeof parsed.nudgeInterval === "number") config.nudgeInterval = parsed.nudgeInterval;
       if (isNonNegativeNumber(parsed.reviewRecentMessages)) config.reviewRecentMessages = parsed.reviewRecentMessages;

@@ -12,6 +12,7 @@ export const DEFAULT_PROJECTS_MEMORY_DIR = "projects-memory";
 
 // ─── Character limits (not tokens — model-independent) ───
 export const DEFAULT_MEMORY_CHAR_LIMIT = 5000;
+export const DEFAULT_MARKDOWN_MIRROR = true;
 export const DEFAULT_USER_CHAR_LIMIT = 5000;
 
 // ─── Learning loop defaults ───

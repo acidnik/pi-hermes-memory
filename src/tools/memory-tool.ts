@@ -17,6 +17,7 @@ import {
   removeSyncedMemories,
   replaceSyncedMemories,
   syncMemoryEntry,
+  loadMemoryScopeEntries,
   isFts5QueryError,
 } from "../store/sqlite-memory-store.js";
 import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
@@ -265,8 +266,33 @@ async function reconcileStoreScope(
 // plain success.
 function degradedRepairMessage(result: { degraded?: boolean; degradedReason?: string }): string | null {
   return result.degraded
-    ? `Saved to Markdown. Search may be temporarily unavailable (FTS5 index error: ${result.degradedReason}). Run /memory-sync-markdown to rebuild the search index.`
+    ? `Search may be temporarily unavailable (FTS5 index error: ${result.degradedReason}). Run /memory-sync-markdown to rebuild the search index.`
     : null;
+}
+
+/**
+ * SQLite-primary reconcile: make a scope authoritative in SQLite from the
+ * desired entry list. Unlike the legacy observer it must NOT swallow real
+ * errors — SQLite is the primary store, so a genuine write failure fails the
+ * mutation. FTS5-index degraded states still return a repair warning.
+ */
+async function reconcileMemoryScopePrimary(
+  entries: string[],
+  rawTarget: "memory" | "user" | "project" | "failure",
+  dbManager: DatabaseManager,
+  projectName?: string | null,
+): Promise<string | null | undefined> {
+  if (rawTarget === "failure") {
+    return degradedRepairMessage(reconcileMarkdownFailureScopes(dbManager, entries));
+  }
+  return degradedRepairMessage(
+    reconcileMarkdownMemoryScope(
+      dbManager,
+      entries,
+      sqliteTargetFor(rawTarget),
+      sqliteProjectFor(rawTarget, projectName) ?? null,
+    ),
+  );
 }
 
 type MemoryAction = "add" | "replace" | "remove";
@@ -287,6 +313,32 @@ export function registerMemoryTool(
   bindProjectFromCwd?: (cwd?: string) => void | Promise<void>,
 ): (candidate: MemoryStore | null) => void {
   const reconciledStores = new WeakSet<MemoryStore>();
+  // Stores that got the SQLite-primary write path (policy-only mode): SQLite is
+  // authoritative and Markdown is an optional mirror, so mutation observers and
+  // the manual markdown→SQLite sync helpers must NOT run for them.
+  const sqliteWritePathStores = new WeakSet<MemoryStore>();
+  const attachSqliteWritePath = (candidate: MemoryStore | null, isProjectStore = false): void => {
+    if (!candidate || sqliteWritePathStores.has(candidate)) return;
+    if (typeof candidate.setSqlitePrimaryWriter !== "function"
+      || typeof candidate.setSqliteScopeLoader !== "function") {
+      return;
+    }
+    candidate.setSqlitePrimaryWriter(async (target, entries) => {
+      if (!dbManager) {
+        return "SQLite is unavailable; memory saved to the Markdown mirror only (search will not see it). Re-run the memory tool after SQLite recovers.";
+      }
+      const rawTarget = isProjectStore && target === "memory" ? "project" : target;
+      return reconcileMemoryScopePrimary(entries, rawTarget, dbManager, resolveProjectName(projectName));
+    });
+    candidate.setSqliteScopeLoader(async (target) => {
+      if (!dbManager) return [];
+      if (isProjectStore && target === "memory") {
+        return loadMemoryScopeEntries(dbManager, "memory", resolveProjectName(projectName) || null);
+      }
+      return loadMemoryScopeEntries(dbManager, target, null);
+    });
+    sqliteWritePathStores.add(candidate);
+  };
   const attachMutationObserver = (candidate: MemoryStore | null, isProjectStore = false): void => {
     if (!candidate || reconciledStores.has(candidate) || typeof candidate.setMutationObserver !== "function") return;
     candidate.setMutationObserver((target, entries) =>
@@ -300,8 +352,10 @@ export function registerMemoryTool(
     reconciledStores.add(candidate);
   };
   const configureProjectStore = (candidate: MemoryStore | null): void => {
+    attachSqliteWritePath(candidate, true);
     attachMutationObserver(candidate, true);
   };
+  attachSqliteWritePath(store);
   attachMutationObserver(store);
   configureProjectStore(resolveProjectStore(projectStore));
 
@@ -341,10 +395,11 @@ export function registerMemoryTool(
     }
 
     const store_ = activeStore!;
+    attachSqliteWritePath(store_, rawTarget === "project");
     attachMutationObserver(store_);
     let result: MemoryResult;
     let syncWarning: string | null = null;
-    const syncHandled = reconciledStores.has(store_);
+    const syncHandled = reconciledStores.has(store_) || sqliteWritePathStores.has(store_);
 
     switch (action) {
       case "add":

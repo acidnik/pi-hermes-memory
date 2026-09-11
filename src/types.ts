@@ -28,6 +28,15 @@ export interface MemoryConfig {
   memoryPolicyCustomText?: string;
   /** Max chars for MEMORY.md (agent notes). Default: 5000 */
   memoryCharLimit: number;
+  /**
+   * Mirror SQLite-authoritative memory back into the Markdown files
+   * (MEMORY.md / USER.md / failures.md) as a human-readable export.
+   * Default: true. When false, Markdown files are left untouched by memory
+   * writes and reads come from SQLite (policy-only mode; searchable and
+   * unlimited). The legacy-inject mode always writes Markdown because it
+   * injects memory into the system prompt from those files.
+   */
+  markdownMirror?: boolean;
   /** Max chars for USER.md (user profile). Default: 5000 */
   userCharLimit: number;
   /** Max chars for project-level MEMORY.md. Default: 5000 */

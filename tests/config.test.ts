@@ -126,6 +126,16 @@ describe("loadConfig", () => {
     assert.strictEqual(loadConfig(TEST_CONFIG_PATH).quickCheckOnOpen, true);
   });
 
+  it("only accepts boolean markdownMirror overrides and defaults to true", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ markdownMirror: "false" }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, true);
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ markdownMirror: false }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, false);
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ reviewEnabled: false }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, true);
+  });
+
   it("merges array-form override tails with explicit llmFallbackModels", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({

@@ -63,6 +63,20 @@ export class MemoryStore {
   private consolidator: ((target: "memory" | "user" | "failure", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
   private overflowSince: Partial<Record<"memory" | "user" | "failure", number>> = {};
   private mutationObserver: ((target: "memory" | "user" | "failure", entries: string[]) => Promise<string | null | undefined>) | null = null;
+  /**
+   * SQLite-primary write path (policy-only mode): persists the authoritative
+   * entry list of a scope straight into SQLite, bypassing the Markdown
+   * character cap and any auto-consolidation gate. Returns an optional
+   * warning (e.g. degraded FTS5 index). Throwing fails the mutation.
+   */
+  private sqlitePrimaryWriter: ((target: "memory" | "user" | "failure", entries: string[]) => Promise<string | null | undefined>) | null = null;
+  /**
+   * SQLite-primary read path: loads the authoritative entry list of a scope
+   * from SQLite (used when Markdown is not a mirror).
+   */
+  private sqliteScopeLoader: ((target: "memory" | "user" | "failure") => Promise<string[]>) | null = null;
+  /** Warning produced by the SQLite primary writer, surfaced in the result. */
+  private pendingSqliteWarning: string | null = null;
 
   constructor(private config: MemoryConfig) {}
 
@@ -78,6 +92,26 @@ export class MemoryStore {
     fn: (target: "memory" | "user" | "failure", entries: string[]) => Promise<string | null | undefined>,
   ): void {
     this.mutationObserver = fn;
+  }
+
+  /**
+   * Inject the SQLite primary writer (policy-only mode). The store persists
+   * every scope write to SQLite first; the Markdown files become an optional
+   * mirror fed from the same authoritative list.
+   */
+  setSqlitePrimaryWriter(
+    fn: (target: "memory" | "user" | "failure", entries: string[]) => Promise<string | null | undefined>,
+  ): void {
+    this.sqlitePrimaryWriter = fn;
+  }
+
+  /**
+   * Inject the SQLite scope loader (policy-only mode). loadFromDisk() reads
+   * the authoritative scope from SQLite instead of the Markdown files when
+   * this is present.
+   */
+  setSqliteScopeLoader(fn: (target: "memory" | "user" | "failure") => Promise<string[]>): void {
+    this.sqliteScopeLoader = fn;
   }
 
   // ─── Path helpers ───
@@ -124,6 +158,26 @@ export class MemoryStore {
     return this.config.memoryMode !== "policy-only";
   }
 
+  /**
+   * SQLite is the authoritative write/read target in the default policy-only
+   * mode. The Markdown files (when mirrored) are a derived human-readable
+   * export, never a write gate: no character cap, no auto-consolidation.
+   */
+  private get sqlitePrimary(): boolean {
+    return this.config.memoryMode === "policy-only";
+  }
+
+  /**
+   * Whether the Markdown files are written as a mirror of the authoritative
+   * state. legacy-inject always mirrors because it injects memory into the
+   * system prompt from those files; policy-only defaults to mirroring
+   * (human-readable export) but can be disabled via `markdownMirror: false`.
+   */
+  private get markdownMirrorEnabled(): boolean {
+    if (this.config.memoryMode === "legacy-inject") return true;
+    return this.config.markdownMirror !== false;
+  }
+
   private charCount(target: "memory" | "user" | "failure"): number {
     const entries = this.entriesFor(target);
     return entries.length ? entries.join(ENTRY_DELIMITER).length : 0;
@@ -152,11 +206,22 @@ export class MemoryStore {
 
   async loadFromDisk(): Promise<void> {
     await fs.mkdir(this.memoryDir, { recursive: true });
-    for (const target of ["memory", "user", "failure"] as const) {
-      const filePath = await this.resolveStoragePath(target);
-      const state = await this.readFileState(filePath);
-      this.setEntries(target, [...new Set(state.entries)]);
-      this.fileFingerprints[filePath] = state.fingerprint;
+
+    if (this.sqlitePrimary && this.sqliteScopeLoader) {
+      // SQLite is the source of truth: load the authoritative scope instead of
+      // the Markdown mirror (which may be disabled or stale). Falls back to the
+      // Markdown files when SQLite cannot be read.
+      try {
+        for (const target of ["memory", "user", "failure"] as const) {
+          const entries = await this.sqliteScopeLoader(target);
+          this.setEntries(target, [...new Set(entries)]);
+        }
+      } catch (error) {
+        console.warn(`⚠️ SQLite scope load failed, falling back to Markdown: ${error instanceof Error ? error.message : String(error)}`);
+        await this.loadMarkdownScopes();
+      }
+    } else {
+      await this.loadMarkdownScopes();
     }
 
     // Deduplicate preserving order
@@ -168,6 +233,15 @@ export class MemoryStore {
       memory: this.renderBlock("memory", strippedMemory),
       user: this.renderBlock("user", strippedUser),
     };
+  }
+
+  private async loadMarkdownScopes(): Promise<void> {
+    for (const target of ["memory", "user", "failure"] as const) {
+      const filePath = await this.resolveStoragePath(target);
+      const state = await this.readFileState(filePath);
+      this.setEntries(target, [...new Set(state.entries)]);
+      this.fileFingerprints[filePath] = state.fingerprint;
+    }
   }
 
   /**
@@ -264,7 +338,7 @@ export class MemoryStore {
 
     entries.push(encoded);
     this.setEntries(target, entries);
-    await this.saveToDisk(target);
+    await this.persist(target);
     markMutation();
 
     return this.successResponse(target, addedMessage);
@@ -351,7 +425,7 @@ export class MemoryStore {
 
     remaining.push(encoded);
     this.setEntries(target, remaining);
-    await this.saveToDisk(target);
+    await this.persist(target);
 
     return {
       ...this.successResponse(
@@ -460,7 +534,7 @@ export class MemoryStore {
       }
 
       this.setEntries(target, plannedEntries);
-      await this.saveToDisk(target);
+      await this.persist(target);
       markMutation();
       return this.successResponse(target, `Applied ${operations.length} memory operations atomically.`);
     }, options.signal);
@@ -521,7 +595,7 @@ export class MemoryStore {
     }
 
     this.setEntries(target, testEntries);
-    await this.saveToDisk(target);
+    await this.persist(target);
     markMutation();
 
     return this.successResponse(target, "Entry replaced.");
@@ -558,7 +632,7 @@ export class MemoryStore {
 
     const matchedEntries = new Set(matches);
     this.setEntries(target, entries.filter((entry) => !matchedEntries.has(entry)));
-    await this.saveToDisk(target);
+    await this.persist(target);
     markMutation();
 
     return this.successResponse(target, "Entry removed.");
@@ -796,6 +870,10 @@ export class MemoryStore {
   }
 
   private async syncTargetFromDiskIfChanged(target: "memory" | "user" | "failure"): Promise<void> {
+    // In SQLite-primary mode the Markdown files are a derived mirror, not the
+    // source of truth: external file edits are ignored (the next mirror write
+    // regenerates them from SQLite).
+    if (this.sqlitePrimary) return;
     const filePath = await this.resolveStoragePath(target);
     const state = await this.readFileState(filePath);
     if (this.fileFingerprints[filePath] === state.fingerprint) return;
@@ -814,6 +892,45 @@ export class MemoryStore {
     storagePath: string,
     result: MemoryResult,
   ): Promise<MemoryResult> {
+    if (this.sqlitePrimary) {
+      // SQLite is authoritative: reload the scope so in-memory state reflects
+      // any concurrent writer, then surface the primary-write warning (e.g. a
+      // degraded FTS5 index) the same way the legacy observer surfaces its own.
+      let stateEntries: string[] = this.entriesFor(target);
+      if (this.sqliteScopeLoader) {
+        try {
+          stateEntries = [...new Set(await this.sqliteScopeLoader(target))];
+          this.setEntries(target, stateEntries);
+        } catch (error) {
+          console.warn(`⚠️ SQLite scope reload failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      let finalized = result;
+      if (result.success) {
+        finalized = {
+          ...result,
+          ...this.successResponse(target, result.message),
+        };
+        if (result.evicted_entries) finalized.evicted_entries = result.evicted_entries;
+        if (result.evicted_count !== undefined) finalized.evicted_count = result.evicted_count;
+        if (result.matches) finalized.matches = result.matches;
+        if (result.entries) finalized.entries = result.entries;
+      }
+
+      const warning = this.pendingSqliteWarning;
+      this.pendingSqliteWarning = null;
+      if (!warning || !finalized.success) return finalized;
+
+      const warnings = [...(finalized.warnings ?? []), warning];
+      return {
+        ...finalized,
+        message: finalized.message ? `${finalized.message} Warning: ${warning}` : warning,
+        warning,
+        warnings,
+      };
+    }
+
     const state = await this.readFileState(storagePath);
     this.setEntries(target, [...new Set(state.entries)]);
     this.fileFingerprints[storagePath] = state.fingerprint;
@@ -860,7 +977,7 @@ export class MemoryStore {
           const result = await mutation(() => {
             mutated = true;
           });
-          if (result.success) {
+          if (result.success && !this.sqlitePrimary) {
             // saveToDisk stamps fileFingerprints on success. If an editor
             // truncates/replaces the file after publish returns, refuse the
             // phantom success and retry against disk truth.
@@ -877,10 +994,12 @@ export class MemoryStore {
           if (result.success && mutated) this.clearOverflow(target);
           return await this.finalizeTargetMutation(target, storagePath, result);
         } catch (error) {
-          delete this.fileFingerprints[storagePath];
-          const state = await this.readFileState(storagePath);
-          this.setEntries(target, [...new Set(state.entries)]);
-          this.fileFingerprints[storagePath] = state.fingerprint;
+          if (!this.sqlitePrimary) {
+            delete this.fileFingerprints[storagePath];
+            const state = await this.readFileState(storagePath);
+            this.setEntries(target, [...new Set(state.entries)]);
+            this.fileFingerprints[storagePath] = state.fingerprint;
+          }
           if (!(error instanceof ExternalMemoryWriteConflict)) throw error;
           if (attempt >= MAX_EXTERNAL_WRITE_RETRIES) {
             return await this.finalizeTargetMutation(target, storagePath, {
@@ -891,6 +1010,60 @@ export class MemoryStore {
         }
       }
     });
+  }
+
+  /**
+   * Persist the authoritative entry list for a target scope.
+   *
+   * SQLite-primary (policy-only): SQLite is written first, then the Markdown
+   * files are optionally mirrored from the same list — the cap and
+   * auto-consolidation gate live on the legacy Markdown path only. In legacy
+   * mode the Markdown files stay the source of truth (same as before), with
+   * the mutation observer syncing SQLite afterwards.
+   */
+  private async persist(target: "memory" | "user" | "failure"): Promise<void> {
+    if (this.sqlitePrimary) {
+      if (this.sqlitePrimaryWriter) {
+        const warning = await this.sqlitePrimaryWriter(target, [...this.entriesFor(target)]);
+        if (warning) this.pendingSqliteWarning = warning;
+      } else if (!this.markdownMirrorEnabled) {
+        throw new Error("Memory write failed: no SQLite store is available and the Markdown mirror is disabled.");
+      }
+      if (this.markdownMirrorEnabled) {
+        const mirrorWarning = await this.writeMarkdownMirror(target);
+        if (mirrorWarning) {
+          this.pendingSqliteWarning = this.pendingSqliteWarning
+            ? `${this.pendingSqliteWarning} ${mirrorWarning}`
+            : mirrorWarning;
+        }
+      }
+      return;
+    }
+    await this.saveToDisk(target);
+  }
+
+  /**
+   * Best-effort Markdown mirror write (SQLite-primary mode). The files are a
+   * derived human-readable export of the authoritative SQLite state, so this
+   * uses a plain atomic overwrite — no conflict/retry protocol, and a failure
+   * must never fail the mutation (memory is already safe in SQLite).
+   */
+  private async writeMarkdownMirror(target: "memory" | "user" | "failure"): Promise<string | null> {
+    const filePath = await this.resolveStoragePath(target);
+    const entries = this.entriesFor(target);
+    const content = entries.length ? entries.join(ENTRY_DELIMITER) : "";
+    const tmpDir = await fs.mkdtemp(path.join(path.dirname(filePath), ".tmp-"));
+    const tmpPath = path.join(tmpDir, "write.tmp");
+    try {
+      await fs.writeFile(tmpPath, content, "utf-8");
+      await fs.rename(tmpPath, filePath);
+      try { await this.pruneRecoveryFiles(filePath); } catch { /* optional */ }
+      return null;
+    } catch (error) {
+      return `Markdown mirror write failed (memory is safe in SQLite): ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      try { await fs.rm(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   }
 
   /**
