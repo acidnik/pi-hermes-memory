@@ -12,6 +12,10 @@ export const DEFAULT_AUTO_RETRIEVE_TOP_K = 3;
 export const DEFAULT_AUTO_RETRIEVE_MAX_CHARS = 1500;
 export const DEFAULT_AUTO_RETRIEVE_MIN_QUERY_CHARS = 12;
 
+export const DEFAULT_BASH_RETRIEVE_TOP_K = 4;
+export const DEFAULT_BASH_RETRIEVE_MAX_CHARS = 1500;
+export const DEFAULT_BASH_RETRIEVE_MIN_TERMS = 1;
+
 // ─── Directory names ───
 export const DEFAULT_PROJECTS_MEMORY_DIR = "projects-memory";
 

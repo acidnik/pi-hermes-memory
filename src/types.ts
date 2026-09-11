@@ -39,6 +39,26 @@ export interface AutoRetrieveConfig {
   minQueryChars?: number;
 }
 
+/**
+ * Optional memory retrieval on bash tool calls: the model's bash command is
+ * reduced to search terms (command names, relative paths, filenames — flags
+ * and absolute paths are dropped), FTS5-searched against memory, and the
+ * top-K matches are appended to the tool result as a block the model sees
+ * right after the tool output. Off by default.
+ */
+export interface BashRetrieveConfig {
+  /** Enables the behavior. Default: false (off) */
+  enabled?: boolean;
+  /** Maximum number of memories appended per tool result. Default: 4 */
+  topK?: number;
+  /** Maximum total characters of the appended block. Default: 1500 */
+  maxChars?: number;
+  /** Which targets to search. Default: all (memory, user, failure) */
+  targets?: AutoRetrieveTarget[];
+  /** Minimum meaningful terms in the command before searching. Default: 1 */
+  minTerms?: number;
+}
+
 export interface MemoryConfig {
   /** Defer policy-only memory initialization until first use. Default: false */
   lazyInitialization?: boolean;
@@ -90,6 +110,8 @@ export interface MemoryConfig {
   sessionSearch?: SessionSearchConfig;
   /** Auto-retrieval of memories before user messages. Default: disabled */
   autoRetrieve?: AutoRetrieveConfig;
+  /** Memory retrieval on bash tool calls. Default: disabled */
+  bashRetrieve?: BashRetrieveConfig;
   /** Run a full SQLite quick_check asynchronously after opening. Default: true */
   quickCheckOnOpen?: boolean;
   /** Override model used for child pi -p subprocess LLM calls. Default: unset */
