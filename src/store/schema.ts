@@ -77,6 +77,7 @@ export const SCHEMA_SQL = `
     target TEXT NOT NULL CHECK (target IN ('memory', 'user', 'failure')),
     category TEXT CHECK (category IN ('failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk')),
     content TEXT NOT NULL,
+    keywords TEXT,
     failure_reason TEXT,
     tool_state TEXT,
     corrected_to TEXT,
@@ -84,9 +85,12 @@ export const SCHEMA_SQL = `
     last_referenced DATE NOT NULL
   );
 
-  -- FTS5 trigram index for memory substring search
+  -- FTS5 trigram index for memory substring search. Keywords (synonyms /
+  -- equivalents in other languages / inflections) live in a second column so
+  -- a plain MATCH spans both content and keywords.
   CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     content,
+    keywords,
     content='memories',
     content_rowid='id',
     tokenize='trigram'
@@ -94,16 +98,16 @@ export const SCHEMA_SQL = `
 
   -- Triggers to keep memory_fts in sync with memories table
   CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+    INSERT INTO memory_fts(rowid, content, keywords) VALUES (new.id, new.content, new.keywords);
   END;
 
   CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memory_fts(memory_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    INSERT INTO memory_fts(memory_fts, rowid, content, keywords) VALUES ('delete', old.id, old.content, old.keywords);
   END;
 
   CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memory_fts(memory_fts, rowid, content) VALUES ('delete', old.id, old.content);
-    INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+    INSERT INTO memory_fts(memory_fts, rowid, content, keywords) VALUES ('delete', old.id, old.content, old.keywords);
+    INSERT INTO memory_fts(rowid, content, keywords) VALUES (new.id, new.content, new.keywords);
   END;
 
   -- Indexes for common queries
