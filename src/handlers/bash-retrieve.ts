@@ -18,9 +18,19 @@
  * across both features), so repeated commands like `npm run check` do not
  * re-inject the same facts over and over; `session_compact` / session quit
  * reset the set, after which facts become injectable again.
+
+ * Delivery uses the same custom message as auto-retrieve: the bash output is
+ * left untouched, and pi injects a separate custom message (steer queue)
+ * right after the tool output, before the model's next continuation. The
+ * transcript renders it through the shared renderer as a collapsible block.
  */
 
 import { isBashToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  RETRIEVAL_MESSAGE_TYPE,
+  renderRetrievalMessage,
+  buildRetrievalDetails,
+} from "./auto-retrieve.js";
 import { searchMemories, type SqliteMemoryEntry } from "../store/sqlite-memory-store.js";
 import {
   getRetrievedMemoryIds,
@@ -183,6 +193,12 @@ export function setupBashRetrieve(
   const targets: readonly AutoRetrieveTarget[] =
     bashRetrieve.targets && bashRetrieve.targets.length > 0 ? bashRetrieve.targets : DEFAULT_TARGETS;
 
+  // Same collapsible transcript block as auto-retrieve (idempotent — also
+  // registered here so bashRetrieve works even when autoRetrieve is off).
+  if (typeof pi.registerMessageRenderer === "function") {
+    pi.registerMessageRenderer(RETRIEVAL_MESSAGE_TYPE, renderRetrievalMessage as never);
+  }
+
   const searchTargets = (query: string, projects: Array<string | null>): SqliteMemoryEntry[] => {
     if (!dbManager) return [];
     const collected: SqliteMemoryEntry[] = [];
@@ -211,8 +227,10 @@ export function setupBashRetrieve(
     return picked;
   };
 
-  // Fired after the bash tool executed: the memory block is appended to the
-  // tool result, so it lands right after the tool output the model reads.
+  // Fired after the bash tool executed: the bash output is left untouched and
+  // the memory block is delivered as a separate custom message (pi's steer
+  // queue), which the run loop injects right after the tool output and before
+  // the model's next continuation — the model sees it as its own block.
   pi.on("tool_result", async (event, ctx) => {
     try {
       if (!isBashToolResult(event)) return;
@@ -241,12 +259,12 @@ export function setupBashRetrieve(
 
       markRetrievedMemoryIds(dbManager, sessionId, picked.map((entry) => entry.id));
 
-      return {
-        content: [
-          ...(event.content ?? []),
-          { type: "text" as const, text: renderBashRetrieveBlock(picked) },
-        ],
-      };
+      pi.sendMessage({
+        customType: RETRIEVAL_MESSAGE_TYPE,
+        content: renderBashRetrieveBlock(picked),
+        display: true,
+        details: buildRetrievalDetails(picked),
+      });
     } catch {
       // Retrieval must never break the tool result.
       return;

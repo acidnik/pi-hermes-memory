@@ -49,17 +49,31 @@ const DEFAULT_TARGETS: readonly AutoRetrieveTarget[] = ["memory", "user", "failu
 const RETRIEVAL_PRUNE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Entry shown to the user in the expandable block (serializable into details). */
-interface RetrievalEntryView {
+export interface RetrievalEntryView {
   target: AutoRetrieveTarget;
   project: string | null;
   category: string | null;
   content: string;
 }
 
-interface RetrievalDetails {
+export interface RetrievalDetails {
   count: number;
   keywords: string;
   entries: RetrievalEntryView[];
+}
+
+/** Shared by auto-retrieve and bash-retrieve for the same transcript renderer. */
+export function buildRetrievalDetails(entries: SqliteMemoryEntry[]): RetrievalDetails {
+  return {
+    count: entries.length,
+    keywords: keywordPreview(entries),
+    entries: entries.map((entry) => ({
+      target: entry.target,
+      project: entry.project,
+      category: entry.category,
+      content: entry.content.length > 500 ? `${entry.content.slice(0, 500)}…` : entry.content,
+    })),
+  };
 }
 
 export interface AutoRetrieveOptions {
@@ -242,23 +256,12 @@ export function setupAutoRetrieve(
 
       markRetrievedMemoryIds(dbManager, sessionId, picked.map((entry) => entry.id));
 
-      const details: RetrievalDetails = {
-        count: picked.length,
-        keywords: keywordPreview(picked),
-        entries: picked.map((entry) => ({
-          target: entry.target,
-          project: entry.project,
-          category: entry.category,
-          content: entry.content.length > 500 ? `${entry.content.slice(0, 500)}…` : entry.content,
-        })),
-      };
-
       return {
         message: {
           customType: RETRIEVAL_MESSAGE_TYPE,
           content: renderRetrievalBlock(picked),
           display: true,
-          details,
+          details: buildRetrievalDetails(picked),
         },
       };
     } catch {
