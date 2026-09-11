@@ -1,8 +1,12 @@
 /**
- * Tests for opt-in FTS5 auto-retrieval (Task 1): memory matches are appended
- * after the user text (cache-safe), each memory row is injected at most once
- * per session (persisted dedup), compaction and session quit reset the rule,
- * and an interactive widget reflects the last injection.
+ * Tests for opt-in FTS5 auto-retrieval (Task 1).
+ *
+ * Injection is delivered as a custom message (the model sees it as a
+ * user-role text block) and the user's own message text is never modified.
+ * The transcript renders that message through our renderer: collapsed shows
+ * just the entry count + keywords, `app.tools.expand` (ctrl+o) expands it.
+ * Only the active project's memories plus global ones are retrieved, each row
+ * at most once per session (persisted), with compaction/quit resets.
  */
 import { describe, it, beforeEach, afterEach } from "node:test";
 import * as assert from "node:assert/strict";
@@ -10,43 +14,76 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseManager } from "../../src/store/db.js";
+import { MemoryStore } from "../../src/store/memory-store.js";
 import { syncMemoryEntry } from "../../src/store/sqlite-memory-store.js";
 import { getRetrievedMemoryIds } from "../../src/store/retrieval-store.js";
-import { setupAutoRetrieve } from "../../src/handlers/auto-retrieve.js";
+import { setCurrentSessionId } from "../../src/session-id.js";
+import {
+  setupAutoRetrieve,
+  renderRetrievalMessage,
+  RETRIEVAL_MESSAGE_TYPE,
+} from "../../src/handlers/auto-retrieve.js";
 import type { MemoryConfig } from "../../src/types.js";
 
 type Handler = (event: any, ctx: any) => unknown;
 
+interface SentMessage {
+  customType: string;
+  content: string;
+  display: boolean;
+  details?: unknown;
+}
+
 interface Harness {
   handlers: Record<string, Handler[]>;
-  shortcuts: Array<{ key: string; handler: (ctx: any) => void }>;
-  widget: string[] | undefined;
+  renderers: Record<string, (message: any, options: any, theme: any) => any>;
   ctx: any;
 }
 
-function createHarness(config: MemoryConfig, ctxOverrides: Record<string, unknown> = {}): Harness {
+/** Fire the before_agent_start hook and return the returned custom message (if any). */
+async function fireRetrieval(harness: Harness, prompt: string): Promise<SentMessage | undefined> {
+  const handler = harness.handlers.before_agent_start?.[0];
+  assert.ok(handler, "before_agent_start handler registered");
+  const result = await handler({ type: "before_agent_start", prompt }, harness.ctx) as
+    | { message?: SentMessage }
+    | undefined;
+  return result?.message;
+}
+
+const themeStub = {
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+};
+
+function createHarness(config: MemoryConfig, opts: {
+  project?: string;
+  cwd?: string;
+  sessionId?: string;
+} = {}): Harness {
   const handlers: Record<string, Handler[]> = {};
-  const shortcuts: Array<{ key: string; handler: (ctx: any) => void }> = [];
+  const renderers: Record<string, (message: any, options: any, theme: any) => any> = {};
   const pi = {
     on: (event: string, handler: Handler) => {
       (handlers[event] ??= []).push(handler);
     },
-    registerShortcut: (key: string, opts: { handler: (ctx: any) => void }) => {
-      shortcuts.push({ key, handler: opts.handler });
+    registerMessageRenderer: (type: string, renderer: (message: any, options: any, theme: any) => any) => {
+      renderers[type] = renderer;
     },
   } as any;
   const harness: Harness = {
     handlers,
-    shortcuts,
-    widget: undefined,
+    renderers,
     ctx: {
-      sessionManager: { getSessionId: () => "test-session" },
-      ui: { setWidget: (key: string, content: string[] | undefined) => { harness.widget = content; } },
-      cwd: "/tmp/test-project",
-      ...ctxOverrides,
+      sessionManager: { getSessionId: () => opts.sessionId ?? "test-session" },
+      cwd: opts.cwd ?? "/tmp/test-project",
+      ui: {},
     },
   };
-  setupAutoRetrieve(pi, config, { dbManager, pruneOnStartup: false } as any);
+  setupAutoRetrieve(pi, config, {
+    dbManager,
+    bindProjectFromCwd: () => {},
+    resolveProjectName: () => opts.project ?? "",
+  });
   return harness;
 }
 
@@ -79,22 +116,30 @@ function seedMemories(): void {
   syncMemoryEntry(dbManager, {
     content: "deployment runs on kubernetes with postgresql databases",
     target: "memory",
-    keywords: ["k8s", "кубернетес", "инфраструктура"],
+    project: null,
+    keywords: ["k8s", "кубернетес"],
+  });
+  syncMemoryEntry(dbManager, {
+    content: "current project uses a monorepo layout",
+    target: "memory",
+    project: "project-a",
+    keywords: ["monorepo", "layout"],
+  });
+  syncMemoryEntry(dbManager, {
+    content: "other project hides secrets in vault",
+    target: "memory",
+    project: "project-b",
+    keywords: ["vault", "secrets"],
   });
   syncMemoryEntry(dbManager, {
     content: "do not parallelize database tests",
     target: "failure",
     category: "correction",
-    keywords: ["tests", "parallel", "база данных"],
-  });
-  syncMemoryEntry(dbManager, {
-    content: "prefers rust over python for cli tools",
-    target: "user",
-    keywords: ["язык", "rust", "python"],
+    keywords: ["tests", "параллельно"],
   });
 }
 
-const QUERY = "kubernetes parallelize rust";
+const QUERY = "kubernetes monorepo vault parallelize";
 
 describe("auto-retrieve", () => {
   beforeEach(() => {
@@ -103,121 +148,126 @@ describe("auto-retrieve", () => {
   });
 
   afterEach(() => {
+    setCurrentSessionId(undefined);
     dbManager.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("disabled by default — no handlers or shortcuts are registered", () => {
+  function policyOnlyConfig(memoryDir: string): MemoryConfig {
+    return baseConfig({
+      memoryMode: "policy-only",
+      markdownMirror: false,
+      memoryDir,
+    });
+  }
+
+  it("disabled by default — no handlers or renderers are registered", () => {
     const harness = createHarness(baseConfig());
-    assert.equal(harness.handlers.input, undefined);
+    assert.equal(harness.handlers.before_agent_start, undefined);
     assert.equal(harness.handlers.session_compact, undefined);
     assert.equal(harness.handlers.session_shutdown, undefined);
-    assert.equal(harness.shortcuts.length, 0);
+    assert.equal(Object.keys(harness.renderers).length, 0);
   });
 
-  it("appends top-K matches after the user text and records the dedup ids", async () => {
+  it("sends the injection as a custom message and never modifies the user text", async () => {
     seedMemories();
-    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }));
-    const result = await harness.handlers.input[0](
-      { type: "input", text: QUERY, source: "interactive" },
-      harness.ctx,
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
+
+    const message = await fireRetrieval(harness, QUERY);
+    assert.ok(message, "exactly one custom message is returned");
+    assert.equal(message.customType, RETRIEVAL_MESSAGE_TYPE);
+    assert.equal(message.display, true);
+    assert.ok(message.content.includes("<retrieved-memory>"));
+    assert.ok(message.content.includes("deployment runs on kubernetes"));
+    assert.ok(message.content.includes("[project:project-a] current project uses a monorepo"));
+    assert.ok(!message.content.includes("other project hides secrets"), "other projects are excluded");
+
+    const details = message.details as { count: number; keywords: string; entries: unknown[] };
+    assert.equal(details.count, 3);
+    assert.ok(details.keywords.includes("k8s"));
+
+    // Dedup rows persisted for the session.
+    assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 3);
+  });
+
+  it("only retrieves active-project and global memories", async () => {
+    seedMemories();
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-b" });
+    const message = await fireRetrieval(harness, QUERY);
+    assert.ok(message);
+    const details = message.details as { entries: Array<{ project: string | null }> };
+    assert.ok(
+      details.entries.every((entry) => entry.project === null || entry.project === "project-b"),
+      "only global and the active project's entries",
     );
+    assert.ok(
+      details.entries.some((entry) => entry.project === "project-b"),
+      "active project memory is included",
+    );
+    assert.ok(
+      !details.entries.some((entry) => entry.project === "project-a"),
+      "another project's memory is excluded",
+    );
+  });
 
-    assert.ok(result, "should return a transform");
-    assert.equal(result.action, "transform");
-    assert.ok(result.text.includes(QUERY), "original user text preserved at the start");
-    const injectedPart = result.text.slice(QUERY.length);
-    assert.ok(injectedPart.includes("<retrieved-memory>"));
-    assert.ok(injectedPart.includes("deployment runs on kubernetes"));
-    // The injected ids are persisted for the session.
-    const injectedIds = getRetrievedMemoryIds(dbManager, "test-session");
-    assert.equal(injectedIds.size, 3);
-
-    // Widget shows the collapsed summary (count + keywords).
-    assert.ok(harness.widget, "widget should be set");
-    assert.match(harness.widget.join("\n"), /Retrieved 3 memory entries/);
-    assert.ok(harness.widget.join("\n").includes("k8s"));
-    assert.ok(harness.widget.join("\n").includes("кубернетес"));
+  it("without an active project only global memories are retrieved", async () => {
+    seedMemories();
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "" });
+    const message = await fireRetrieval(harness, QUERY);
+    assert.ok(message);
+    const details = message.details as { entries: Array<{ project: string | null }> };
+    assert.ok(details.entries.every((entry) => entry.project === null), "no project-scoped entries");
   });
 
   it("never re-injects the same ids in a session (persisted dedup, strict once)", async () => {
     seedMemories();
-    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }));
-    const first = await harness.handlers.input[0](
-      { type: "input", text: QUERY, source: "interactive" },
-      harness.ctx,
-    );
-    assert.equal(first.action, "transform");
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
+    assert.ok(await fireRetrieval(harness, QUERY));
 
-    // Same/similar query in the same session: everything already injected.
-    const second = await harness.handlers.input[0](
-      { type: "input", text: "we still need to deploy kubernetes infrastructure", source: "interactive" },
-      harness.ctx,
-    );
-    assert.equal(second, undefined, "no re-injection when all top matches were already shown");
+    const second = await fireRetrieval(harness, "kubernetes monorepo vault parallelize again");
+    assert.equal(second, undefined, "no re-injection when all matches were already shown");
 
     // A "new process" (fresh handler, same DB) sees the persisted rows.
-    const restarted = createHarness(baseConfig({ autoRetrieve: { enabled: true } }));
-    const third = await restarted.handlers.input[0](
-      { type: "input", text: QUERY, source: "interactive" },
-      restarted.ctx,
-    );
-    assert.equal(third, undefined, "persisted dedup survives process restarts");
+    const restarted = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
+    assert.equal(await fireRetrieval(restarted, QUERY), undefined, "persisted dedup survives process restarts");
   });
 
   it("compaction resets the session dedup so facts are injected once more", async () => {
     seedMemories();
-    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }));
-    const first = await harness.handlers.input[0](
-      { type: "input", text: QUERY, source: "interactive" },
-      harness.ctx,
-    );
-    assert.equal(first.action, "transform");
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
+    assert.ok(await fireRetrieval(harness, QUERY));
     assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 3);
 
     await harness.handlers.session_compact[0]({ type: "session_compact" }, harness.ctx);
     assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 0, "compaction clears dedup");
-    // Not injected twice within the same turn sequence — but after compaction
-    // the same facts are eligible again.
-    const after = await harness.handlers.input[0](
-      { type: "input", text: QUERY, source: "interactive" },
-      harness.ctx,
-    );
-    assert.ok(after, "re-injection allowed after compaction");
-    assert.match(after.text, /deployment runs on kubernetes/);
+
+    assert.ok(await fireRetrieval(harness, QUERY), "re-injection allowed after compaction");
   });
 
   it("quit clears dedup; reload keeps it", async () => {
     seedMemories();
-    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }));
-    await harness.handlers.input[0]({ type: "input", text: QUERY, source: "interactive" }, harness.ctx);
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
+    assert.ok(await fireRetrieval(harness, QUERY));
     assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 3);
 
-    // Reload (same session continues) keeps the rows.
     await harness.handlers.session_shutdown[0]({ type: "session_shutdown", reason: "reload" }, harness.ctx);
     assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 3, "reload keeps dedup");
 
-    // Quit drops them — a resumed session may inject again.
-    const harness2 = createHarness(baseConfig({ autoRetrieve: { enabled: true } }));
-    assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 3);
-    await harness2.handlers.session_shutdown[0]({ type: "session_shutdown", reason: "quit" }, harness.ctx);
+    await harness.handlers.session_shutdown[0]({ type: "session_shutdown", reason: "quit" }, harness.ctx);
     assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 0, "quit clears dedup");
   });
 
   it("skips short queries, slash commands and background prompts", async () => {
     seedMemories();
-    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }));
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
     const cases = [
-      "hi",                                                    // < minQueryChars
-      "/memory-insights",                                      // command
-      "Review the conversation above and save what matters",   // background review
-      "[System: The session is being compressed — save interesting facts", // flush
+      "hi",
+      "/memory-insights",
+      "Review the conversation above and save what matters",
+      "[System: The session is being compressed — save interesting facts",
     ];
     for (const text of cases) {
-      const result = await harness.handlers.input[0](
-        { type: "input", text, source: "interactive" },
-        harness.ctx,
-      );
+      const result = await fireRetrieval(harness, text);
       assert.equal(result, undefined, `should skip: ${text.slice(0, 40)}`);
     }
     assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 0);
@@ -225,59 +275,145 @@ describe("auto-retrieve", () => {
 
   it("targets filter restricts which memories are retrieved", async () => {
     seedMemories();
-    const harness = createHarness(baseConfig({
-      autoRetrieve: { enabled: true, targets: ["failure"] },
-    }));
-    const result = await harness.handlers.input[0](
-      { type: "input", text: QUERY, source: "interactive" },
-      harness.ctx,
+    const harness = createHarness(
+      baseConfig({ autoRetrieve: { enabled: true, targets: ["failure"] } }),
+      { project: "project-a" },
     );
-    assert.ok(result);
-    assert.ok(result.text.includes("[failure:correction] do not parallelize database tests"));
-    assert.ok(!result.text.includes("deployment runs on kubernetes"));
+    const message = await fireRetrieval(harness, QUERY);
+    assert.ok(message);
+    const details = message.details as { entries: Array<{ target: string }> };
+    assert.ok(details.entries.every((entry) => entry.target === "failure"));
   });
 
-  it("ctrl+o toggles the widget between collapsed and expanded", async () => {
+  it("renderer shows count + keywords collapsed and the full block expanded", async () => {
     seedMemories();
-    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }));
-    await harness.handlers.input[0]({ type: "input", text: QUERY, source: "interactive" }, harness.ctx);
-    assert.match(harness.widget!.join("\n"), /ctrl\+o to expand/);
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
+    const message = await fireRetrieval(harness, QUERY);
+    assert.ok(message);
 
-    const shortcut = harness.shortcuts.find((s) => s.key === "ctrl+o");
-    assert.ok(shortcut, "ctrl+o shortcut registered");
-    shortcut!.handler(harness.ctx);
-    assert.match(harness.widget!.join("\n"), /deployment runs on kubernetes/, "expanded shows the full injection");
-    assert.match(harness.widget!.join("\n"), /ctrl\+o to collapse/);
+    const renderer = harness.renderers[RETRIEVAL_MESSAGE_TYPE];
+    assert.ok(renderer, "renderer registered for the retrieval message type");
 
-    shortcut!.handler(harness.ctx);
-    assert.match(harness.widget!.join("\n"), /ctrl\+o to expand/, "second press collapses again");
+    const collapsed = renderer(message, { expanded: false }, themeStub).render(120).join("\n");
+    assert.match(collapsed, /Retrieved 3 entries/);
+    assert.ok(collapsed.includes("k8s"));
+    assert.match(collapsed, /ctrl\+o to expand/);
+    assert.ok(!collapsed.includes("current project uses a monorepo"), "collapsed hides the full content");
+
+    const expanded = renderer(message, { expanded: true }, themeStub).render(120).join("\n");
+    assert.ok(expanded.includes("current project uses a monorepo"));
+    assert.ok(expanded.includes("[project:project-a]"));
+    assert.ok(!expanded.includes("to expand"));
+  });
+
+  it("marks freshly written memories as already injected for the session", async () => {
+    seedMemories();
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
+
+    // Real write path: registerMemoryTool wires the session provider + writer.
+    const { registerMemoryTool } = await import("../../src/tools/memory-tool.js");
+    const store = new MemoryStore(policyOnlyConfig(tmpDir));
+    let addTool: any;
+    const toolPi = {
+      registerTool: (def: any) => { if (def.name === "memory_add") addTool = def; },
+    } as any;
+    registerMemoryTool(toolPi, store, null, dbManager);
+    await store.loadFromDisk();
+    setCurrentSessionId("test-session");
+    await addTool.execute(
+      "tc-1",
+      { target: "memory", content: "freshly written fact about deploy", keywords: ["deploy", "новый"] },
+      undefined, undefined, undefined,
+    );
+
+    // Auto-retrieval must not re-inject the just-written fact.
+    const message = await fireRetrieval(harness, "freshly deploy kubernetes monorepo vault parallelize");
+    assert.ok(message);
+    const details = message.details as { entries: Array<{ content: string }> };
+    assert.ok(
+      details.entries.every((entry) => !entry.content.includes("freshly written fact")),
+      "just-written fact is marked as injected and not re-injected",
+    );
+    assert.ok(
+      details.entries.some((entry) => entry.content.includes("deployment runs on kubernetes")),
+      "older facts are still retrieved",
+    );
+
+    // The row id is in the persisted dedup.
+    const rows = dbManager.getDb().prepare("SELECT id FROM memories WHERE content LIKE 'freshly written%'").all() as Array<{ id: number }>;
+    assert.equal(rows.length, 1);
+    const marked = getRetrievedMemoryIds(dbManager, "test-session");
+    assert.ok(marked.has(rows[0].id), "fresh row is marked as retrieved for the session");
+
+    // Without a session the write is not attributed (no crash).
+    setCurrentSessionId(undefined);
+    await addTool.execute(
+      "tc-2",
+      { target: "memory", content: "unattributed fact" },
+      undefined, undefined, undefined,
+    );
+    assert.ok(store.getMemoryEntries().some((entry) => entry.includes("unattributed fact")));
+  });
+
+  it("store-level: fresh adds/replaces flush to the injected writer", async () => {
+    const store = new MemoryStore(policyOnlyConfig(tmpDir));
+    const writtenByTarget: Record<string, string[]> = {};
+    store.setSqlitePrimaryWriter(async (target, entries) => { writtenByTarget[target] = entries; return null; });
+    store.setSqliteScopeLoader(async (target) => writtenByTarget[target] ?? []);
+    const marked: Array<{ target: string; raws: string[] }> = [];
+    store.setSessionIdProvider(() => "session-x");
+    store.setInjectedWriter((target, raws) => { marked.push({ target, raws: [...raws] }); });
+    await store.loadFromDisk();
+
+    await store.add("memory", "added fact", undefined, { keywords: ["kw"] });
+    assert.equal(marked.length, 1);
+    assert.equal(marked[0].target, "memory");
+    assert.ok(marked[0].raws[0].includes("added fact"));
+    assert.ok(marked[0].raws[0].includes("keys=kw"));
+
+    await store.replace("memory", "added fact", "replaced fact");
+    assert.equal(marked.length, 2);
+    assert.ok(marked[1].raws[0].includes("replaced fact"));
+
+    marked.length = 0;
+    await store.applyMutationPlan("memory", [
+      { action: "add", content: "plan added one", keywords: ["p1"] },
+      { action: "add", content: "plan added two" },
+    ]);
+    assert.equal(marked.length, 1);
+    assert.equal(marked[0].raws.length, 2);
+
+    // No session → the queue is dropped silently.
+    store.setSessionIdProvider(() => undefined);
+    marked.length = 0;
+    const result = await store.add("memory", "no-session write");
+    assert.equal(result.success, true);
+    assert.equal(marked.length, 0);
   });
 
   it("lazy isReady guard skips retrieval until initialization", async () => {
     seedMemories();
     let ready = false;
     const handlers2: Record<string, Handler[]> = {};
-    const widgets: string[] | undefined = undefined;
+    const pi2 = {
+      on: (event: string, handler: Handler) => { (handlers2[event] ??= []).push(handler); },
+      registerMessageRenderer: () => {},
+    } as any;
     const ctx2 = {
       sessionManager: { getSessionId: () => "test-session" },
-      ui: { setWidget: () => widgets },
       cwd: "/tmp/test-project",
     };
-    const pi2 = {
-      on: (e: string, h: Handler) => { (handlers2[e] ??= []).push(h); },
-      registerShortcut: () => {},
-    } as any;
     setupAutoRetrieve(pi2, baseConfig({ autoRetrieve: { enabled: true } }), {
       dbManager,
       isReady: () => ready,
+      resolveProjectName: () => "project-a",
     });
 
-    const skipped = await handlers2.input[0]({ type: "input", text: QUERY, source: "interactive" }, ctx2);
+    const skipped = await handlers2.before_agent_start[0]({ type: "before_agent_start", prompt: QUERY }, ctx2);
     assert.equal(skipped, undefined, "lazy-not-ready skips");
 
     ready = true;
-    const injected = await handlers2.input[0]({ type: "input", text: QUERY, source: "interactive" }, ctx2);
-    assert.ok(injected, "after initialization the transform runs");
-    assert.match(injected.text, /deployment runs on kubernetes/);
+    const injected = await handlers2.before_agent_start[0]({ type: "before_agent_start", prompt: QUERY }, ctx2) as any;
+    assert.ok(injected?.message, "after initialization retrieval runs");
   });
 });

@@ -77,6 +77,18 @@ export class MemoryStore {
   private sqliteScopeLoader: ((target: "memory" | "user" | "failure") => Promise<string[]>) | null = null;
   /** Warning produced by the SQLite primary writer, surfaced in the result. */
   private pendingSqliteWarning: string | null = null;
+  /**
+   * Resolves the current session id so freshly written facts can be marked as
+   * already injected (auto-retrieval dedup).
+   */
+  private sessionIdProvider: (() => string | undefined) | null = null;
+  /**
+   * Records freshly written entries as already injected for the current
+   * session (target, raw entry texts, optional fallback project).
+   */
+  private injectedWriter: ((target: "memory" | "user" | "failure", rawEntries: string[], project?: string | null) => void) | null = null;
+  /** Queue of entry texts written since the last successful flush. */
+  private pendingInjected: Array<{ target: "memory" | "user" | "failure"; raw: string; project?: string | null }> = [];
 
   constructor(private config: MemoryConfig) {}
 
@@ -112,6 +124,18 @@ export class MemoryStore {
    */
   setSqliteScopeLoader(fn: (target: "memory" | "user" | "failure") => Promise<string[]>): void {
     this.sqliteScopeLoader = fn;
+  }
+
+  /** Inject a session-id resolver used to attribute fresh writes. */
+  setSessionIdProvider(fn: (() => string | undefined) | null): void {
+    this.sessionIdProvider = fn;
+  }
+
+  /** Inject a callback that marks freshly written entries as already injected. */
+  setInjectedWriter(
+    fn: ((target: "memory" | "user" | "failure", rawEntries: string[], project?: string | null) => void) | null,
+  ): void {
+    this.injectedWriter = fn;
   }
 
   // ─── Path helpers ───
@@ -347,7 +371,7 @@ export class MemoryStore {
     this.setEntries(target, entries);
     await this.persist(target);
     markMutation();
-
+    this.pendingInjected.push({ target, raw: encoded, project });
     return this.successResponse(target, addedMessage);
   }
 
@@ -434,7 +458,7 @@ export class MemoryStore {
     remaining.push(encoded);
     this.setEntries(target, remaining);
     await this.persist(target);
-
+    this.pendingInjected.push({ target, raw: encoded });
     return {
       ...this.successResponse(
         target,
@@ -471,6 +495,7 @@ export class MemoryStore {
       }
 
       const originalEntries = [...this.entriesFor(target)];
+      const planNewTexts: string[] = [];
       let plannedEntries = [...originalEntries];
       const today = new Date().toISOString().split("T")[0];
 
@@ -495,7 +520,9 @@ export class MemoryStore {
           })) {
             return { success: false, error: "Memory mutation plan would add a duplicate entry." };
           }
-          plannedEntries.push(this.encodeEntry(normalizedContent, today, today, operation.project, operation.keywords));
+          const addedEncoded = this.encodeEntry(normalizedContent, today, today, operation.project, operation.keywords);
+          planNewTexts.push(addedEncoded);
+          plannedEntries.push(addedEncoded);
           continue;
         }
 
@@ -523,6 +550,7 @@ export class MemoryStore {
           const decoded = this.decodeEntry(entry);
           return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined, decoded.keywords)];
         }));
+        for (const replacement of replacements.values()) planNewTexts.push(replacement);
         plannedEntries = plannedEntries.map((entry) => replacements.get(entry) ?? entry);
       }
 
@@ -544,6 +572,7 @@ export class MemoryStore {
       this.setEntries(target, plannedEntries);
       await this.persist(target);
       markMutation();
+      for (const raw of planNewTexts) this.pendingInjected.push({ target, raw });
       return this.successResponse(target, `Applied ${operations.length} memory operations atomically.`);
     }, options.signal);
   }
@@ -605,7 +634,7 @@ export class MemoryStore {
     this.setEntries(target, testEntries);
     await this.persist(target);
     markMutation();
-
+    for (const entry of replacements.values()) this.pendingInjected.push({ target, raw: entry });
     return this.successResponse(target, "Entry replaced.");
   }
 
@@ -917,6 +946,9 @@ export class MemoryStore {
     storagePath: string,
     result: MemoryResult,
   ): Promise<MemoryResult> {
+    // Freshly written facts are marked as already injected for the session so
+    // auto-retrieval does not immediately re-inject them.
+    if (result.success) this.flushPendingInjected();
     if (this.sqlitePrimary) {
       // SQLite is authoritative: reload the scope so in-memory state reflects
       // any concurrent writer, then surface the primary-write warning (e.g. a
@@ -1035,6 +1067,27 @@ export class MemoryStore {
         }
       }
     });
+  }
+
+  /**
+   * Flush queued fresh writes to the injected-writer (auto-retrieval dedup).
+   * Best-effort: without a session or a writer the queue is dropped silently.
+   */
+  private flushPendingInjected(): void {
+    if (this.pendingInjected.length === 0) return;
+    const queued = this.pendingInjected;
+    this.pendingInjected = [];
+    const sessionId = this.sessionIdProvider?.();
+    if (!sessionId || !this.injectedWriter) return;
+    const byTarget = new Map<"memory" | "user" | "failure", string[]>();
+    for (const { target, raw } of queued) {
+      const list = byTarget.get(target) ?? [];
+      list.push(raw);
+      byTarget.set(target, list);
+    }
+    for (const [target, raws] of byTarget) {
+      try { this.injectedWriter(target, raws); } catch { /* best effort */ }
+    }
   }
 
   /**
