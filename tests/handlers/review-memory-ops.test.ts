@@ -730,7 +730,9 @@ describe("applyReviewOperations", () => {
       { requireAtomicShrink: true, expectedTarget: "project" },
     );
 
-    assert.deepStrictEqual(result, { appliedCount: 2, skippedCount: 0 });
+    assert.strictEqual(result.appliedCount, 2);
+    assert.strictEqual(result.skippedCount, 0);
+    assert.strictEqual(result.applied?.length, 2);
     assert.deepStrictEqual(store.getMemoryEntries().map((entry) => entry.replace(/\s*<!--.*$/, "")), [
       "global source stays intact",
     ]);
@@ -771,7 +773,9 @@ describe("applyReviewOperations", () => {
       { requireAtomicShrink: true, expectedTarget: "failure" },
     );
 
-    assert.deepStrictEqual(result, { appliedCount: 2, skippedCount: 0 });
+    assert.strictEqual(result.appliedCount, 2);
+    assert.strictEqual(result.skippedCount, 0);
+    assert.strictEqual(result.applied?.length, 2);
     assert.deepStrictEqual(store.getFailureEntries(), [
       "[failure] concise lesson — Failed: tool used stale state",
     ]);
@@ -808,7 +812,9 @@ describe("applyReviewOperations", () => {
         "project-a",
       );
 
-      assert.deepStrictEqual(result, { appliedCount: 1, skippedCount: 0 });
+          assert.strictEqual(result.appliedCount, 1);
+    assert.strictEqual(result.skippedCount, 0);
+    assert.strictEqual(result.applied?.length, 1);
       assert.deepStrictEqual(store.getFailureEntries(), [
         "[correction] ordinary scoped lesson — Failed: user corrected the command",
       ]);

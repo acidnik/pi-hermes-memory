@@ -25,8 +25,8 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text, Container, getKeybindings, type Component } from "@earendil-works/pi-tui";
-import * as piTui from "@earendil-works/pi-tui";
+import { type Component } from "@earendil-works/pi-tui";
+import { CollapsibleBlockComponent, expandHint } from "./collapsible-block.js";
 import { searchMemories, type SqliteMemoryEntry } from "../store/sqlite-memory-store.js";
 import {
   getRetrievedMemoryIds,
@@ -75,21 +75,6 @@ export interface AutoRetrieveOptions {
 /** Purge stale dedup rows (sessions that crashed without shutdown). */
 export function pruneAutoRetrievalRows(dbManager: DatabaseManager): void {
   try { pruneRetrievalRows(dbManager, RETRIEVAL_PRUNE_MAX_AGE_MS); } catch { /* best effort */ }
-}
-
-/** The key that toggles expanded output (same one tool results use). */
-function expandKeyHint(): string {
-  try {
-    const keybindings = getKeybindings() as unknown as {
-      getKeys?: (keybinding: string) => unknown;
-    };
-    const keys = keybindings?.getKeys?.("app.tools.expand");
-    const first = Array.isArray(keys) ? keys[0] : keys;
-    if (typeof first === "string") return first;
-    const key = (first as { key?: unknown } | undefined)?.key;
-    if (typeof key === "string") return key;
-  } catch { /* fall through */ }
-  return RETRIEVAL_FALLBACK_HINT;
 }
 
 function scopeLabel(entry: RetrievalEntryView): string {
@@ -141,46 +126,6 @@ function renderRetrievalBlock(entries: SqliteMemoryEntry[]): string {
   ].join("\n");
 }
 
-/** Interactive transcript block: collapsed count+keywords, expandable via the
- * standard app.tools.expand key (ctrl+o) AND a left click (MouseRegion, the
- * same mechanism tool-output blocks use). */
-class RetrievalBlockComponent extends Container {
-  private expanded: boolean;
-
-  constructor(
-    private readonly state: () => { collapsed: string[]; expanded: string[] },
-    initialExpanded: boolean,
-  ) {
-    super();
-    this.expanded = initialExpanded;
-    this.rebuild();
-  }
-
-  private rebuild(): void {
-    this.clear();
-    const text = new Text(
-      (this.expanded ? this.state().expanded : this.state().collapsed).join("\n"),
-      1,
-      0,
-    );
-    // MouseRegion ships in newer pi-tui; fall back to keyboard-only when absent.
-    const MouseRegion = (piTui as { MouseRegion?: unknown }).MouseRegion as
-      | (new (child: Component, onMouse: (event: any) => any) => Component)
-      | undefined;
-    if (typeof MouseRegion === "function") {
-      this.addChild(new MouseRegion(text, (event: any) => {
-        if (event?.type !== "click" || event?.button !== "left") return undefined;
-        this.expanded = !this.expanded;
-        this.rebuild();
-        this.invalidate();
-        return { handled: true };
-      }));
-    } else {
-      this.addChild(text);
-    }
-  }
-}
-
 /** Interactive transcript renderer: collapsed count+keywords, expandable. */
 export function renderRetrievalMessage(
   message: { details?: unknown },
@@ -194,9 +139,9 @@ export function renderRetrievalMessage(
   const header = theme.fg("accent", `🧠 Retrieved ${label}`)
     + (details?.keywords ? theme.fg("muted", `: ${details.keywords}`) : "");
 
-  return new RetrievalBlockComponent(
+  return new CollapsibleBlockComponent(
     () => ({
-      collapsed: [header, theme.fg("muted", `   ${expandKeyHint()} to expand (or click)`),],
+      collapsed: [header, theme.fg("muted", `   ${expandHint()} to expand (or click)`),],
       expanded: [header, "", ...entries.map((entry) => `${theme.fg("muted", `- [${scopeLabel(entry)}] `)}${entry.content}`)],
     }),
     options.expanded,

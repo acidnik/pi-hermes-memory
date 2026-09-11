@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Review notifications show what was saved in a clickable block**: the `💾 Memory auto-reviewed and updated (N new entries)` toast is now complemented by a collapsible chat entry (`memory-saved`) rendered with the same clickable/ctrl+o block as auto-retrieval — collapsed it shows the count, one click expands the full list of applied operations (`[add][memory] …`, `[replace][user] …`). Feed by a new `appliedDetails` on the direct review result (per-operation details collected in applyReviewOperations). Subprocess fallback remains toast-only, and the block is human-view only (appendEntry, never sent to the LLM).
+
+
 - **Keyword synonyms make memories findable by alternate word forms**: entries can carry searchable `keywords` (JSON array in the SQLite `memories.keywords` column, mirrored into the Markdown metadata comment as `keys=...`). `memory_add` accepts an optional `keywords` parameter, and the review / flush / correction prompts (`DIRECT_REVIEW_SYSTEM_PROMPT`, `COMBINED_REVIEW_PROMPT`, `DIRECT_FLUSH_SYSTEM_PROMPT`, `DIRECT_CORRECTION_SYSTEM_PROMPT`) instruct the model to extract them — synonyms, other languages (RU↔EN), and inflections (index → indices, индексация). `memory_search` matches both `content` and `keywords` through the second FTS5 column, and the short-CJK / stop-word LIKE fallbacks scan both columns too. Existing databases are upgraded in place: the `keywords` column is added, the single-column `memory_fts` index is rebuilt with the `keywords` column and matching triggers (versioned `fts5_keywords_version` marker), and the legacy target-constraint rebuild preserves the new column. Old rows without keywords keep working (`keywords` is NULL).
 
 

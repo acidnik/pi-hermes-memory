@@ -19,7 +19,41 @@ import type { MemoryConfig } from "../types.js";
 import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
-import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
+import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult, type ReviewMemoryOperation } from "./review-memory-ops.js";
+import { CollapsibleBlockComponent, expandHint, type CollapsibleBlockState } from "./collapsible-block.js";
+
+/** Custom-entry type for the collapsible "what was saved" review block. */
+export const SAVED_MEMORY_ENTRY_TYPE = "memory-saved";
+
+interface SavedMemoryDetails {
+  count: number;
+  entries: ReviewMemoryOperation[];
+}
+
+function savedActionLine(operation: ReviewMemoryOperation): string {
+  const content = (operation.content ?? operation.old_text ?? "").trim();
+  const preview = content.length > 220 ? `${content.slice(0, 220)}…` : content;
+  return `- [${operation.action}][${operation.target}] ${preview}`;
+}
+
+/** Entry renderer: collapsed "N entries (click/ctrl+o)", expanded lists them. */
+export function renderMemorySavedEntry(
+  entry: { details?: unknown },
+  options: { expanded: boolean },
+  theme: { fg: (color: string, text: string) => string },
+) {
+  const details = entry.details as SavedMemoryDetails | undefined;
+  const entries = Array.isArray(details?.entries) ? details.entries : [];
+  const count = entries.length;
+  const label = `${count} ${count === 1 ? "entry" : "entries"}`;
+  const header = theme.fg("accent", `💾 Memory auto-reviewed: ${label}`);
+
+  const state: () => CollapsibleBlockState = () => ({
+    collapsed: [header, theme.fg("muted", `   ${expandHint()} to expand (or click)`)],
+    expanded: [header, "", ...entries.map(savedActionLine)],
+  });
+  return new CollapsibleBlockComponent(state, options.expanded);
+}
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 export interface BackgroundReviewOptions {
@@ -169,6 +203,11 @@ export function setupBackgroundReview(
   const onReviewSettled = options.deps?.onReviewSettled;
   const shutdownGraceMs = options.deps?.shutdownGraceMs ?? SESSION_REVIEW_SHUTDOWN_GRACE_MS;
 
+  const rendererApi = pi as unknown as { registerEntryRenderer?: (type: string, renderer: unknown) => void };
+  if (typeof rendererApi.registerEntryRenderer === "function") {
+    rendererApi.registerEntryRenderer(SAVED_MEMORY_ENTRY_TYPE, renderMemorySavedEntry);
+  }
+
   let turnsSinceReview = 0;
   let toolCallsSinceReview = 0;
   let userTurnCount = 0;
@@ -228,12 +267,17 @@ export function setupBackgroundReview(
     turnsSinceReview = 0;
     toolCallsSinceReview = 0;
 
-    const notifyIfSaved = (saved: boolean, extractedCount?: number) => {
+    const notifyIfSaved = (saved: boolean, extractedCount?: number, appliedDetails?: ReviewMemoryOperation[]) => {
       if (sessionCancelled()) return;
       if (!saved) return;
       const count = extractedCount ?? 0;
       const suffix = count > 0 ? ` (${count} new ${count === 1 ? "entry" : "entries"})` : "";
       ctx.ui.notify(`💾 Memory auto-reviewed and updated${suffix}`, "info");
+      if (typeof pi.appendEntry === "function" && appliedDetails && appliedDetails.length > 0) {
+        try {
+          pi.appendEntry(SAVED_MEMORY_ENTRY_TYPE, { count, entries: appliedDetails } satisfies SavedMemoryDetails);
+        } catch { /* best effort */ }
+      }
     };
 
     const notifyTransportFailure = (directFailure: string, subprocessDetail: unknown) => {
@@ -297,7 +341,7 @@ export function setupBackgroundReview(
           if (sessionCancelled()) return;
 
           if (directResult.ok) {
-            notifyIfSaved(shouldNotifyDirect(directResult), directResult.appliedCount);
+            notifyIfSaved(shouldNotifyDirect(directResult), directResult.appliedCount, directResult.appliedDetails);
             return;
           }
 

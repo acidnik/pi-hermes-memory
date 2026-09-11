@@ -5,7 +5,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   buildDirectReviewUserPrompt,
   buildSubprocessReviewPrompt,
+  renderMemorySavedEntry,
   setupBackgroundReview,
+  SAVED_MEMORY_ENTRY_TYPE,
   type BackgroundReviewDeps,
 } from "../../src/handlers/background-review.js";
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
@@ -23,6 +25,9 @@ let handlers: Record<string, Function[]>;
 let execCalls: any[];
 let directCalls: any[];
 let notifyCalls: any[];
+let appendedEntries: Array<{ type: string; data: unknown }>;
+let entryRenderers: Record<string, (entry: any, options: any, theme: any) => any>;
+const themeStub = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text };
 
 // The turn_end handler intentionally does not await its review work
 // (fire-and-forget, so background review never blocks interactive chat —
@@ -71,6 +76,12 @@ function createMockPi(execReturn?: { code: number; stdout: string; stderr: strin
     },
     registerTool: () => {},
     registerCommand: () => {},
+    registerEntryRenderer: (type: string, renderer: (entry: any, options: any, theme: any) => any) => {
+      entryRenderers[type] = renderer;
+    },
+    appendEntry: (type: string, data: unknown) => {
+      appendedEntries.push({ type, data });
+    },
   } as any;
 }
 
@@ -181,6 +192,8 @@ describe("setupBackgroundReview", () => {
     execCalls = [];
     directCalls = [];
     notifyCalls = [];
+    appendedEntries = [];
+    entryRenderers = {};
     resetReviewSettledSignal();
   });
 
@@ -724,6 +737,58 @@ describe("setupBackgroundReview", () => {
     await settle();
 
     assert.strictEqual(execCalls.length, 0, "exec should NOT be called — no toolCall blocks, turn threshold not met");
+  });
+
+  it("appends a collapsible memory-saved entry with the applied details", async () => {
+    const appliedDetails = [
+      { action: "add" as const, target: "memory" as const, content: "prefers pnpm over npm" },
+      { action: "add" as const, target: "user" as const, content: "uses neovim daily" },
+    ];
+    const pi = createMockPi();
+    setupWithDirectDeps(pi, { ok: true, appliedCount: 2, appliedDetails }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) fireTurnEnd();
+    await reviewSettledSignal.promise;
+
+    assert.ok(notifyCalls.some((n) => n.msg.includes("Memory auto-reviewed")), "toast still fires");
+    assert.strictEqual(appendedEntries.length, 1);
+    assert.strictEqual(appendedEntries[0].type, SAVED_MEMORY_ENTRY_TYPE);
+    const details = appendedEntries[0].data as { count: number; entries: Array<{ action: string; content: string }> };
+    assert.strictEqual(details.count, 2);
+    assert.strictEqual(details.entries.length, 2);
+
+    const renderer = entryRenderers[SAVED_MEMORY_ENTRY_TYPE];
+    assert.ok(renderer, "entry renderer registered");
+    const collapsed = renderer({ details }, { expanded: false }, themeStub).render(120).join("\n");
+    assert.match(collapsed, /2 entries/);
+    assert.ok(!collapsed.includes("prefers pnpm"), "collapsed hides the content");
+
+    const expanded = renderer({ details }, { expanded: true }, themeStub).render(120).join("\n");
+    assert.ok(expanded.includes("[add][memory] prefers pnpm over npm"));
+    assert.ok(expanded.includes("[add][user] uses neovim daily"));
+  });
+
+  it("does not append a memory-saved entry when nothing was saved", async () => {
+    const pi = createMockPi();
+    setupWithDirectDeps(pi, { ok: true, appliedCount: 0, fallbackReason: "empty" }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) fireTurnEnd();
+    await reviewSettledSignal.promise;
+
+    assert.strictEqual(notifyCalls.filter((n) => n.msg.includes("Memory auto-reviewed")).length, 0);
+    assert.strictEqual(appendedEntries.length, 0);
   });
 
   it("uses direct review by default and does not call subprocess", async () => {
