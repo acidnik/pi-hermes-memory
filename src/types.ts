@@ -144,6 +144,8 @@ export interface MemoryMutationOperation {
   category?: MemoryCategory;
   failureReason?: string;
   project?: string;
+  /** Search synonyms / equivalents / inflections (add operations only). */
+  keywords?: string[];
 }
 
 export interface MemorySnapshot {
