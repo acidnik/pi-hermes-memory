@@ -756,7 +756,11 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) fireTurnEnd();
     await reviewSettledSignal.promise;
 
-    assert.ok(notifyCalls.some((n) => n.msg.includes("Memory auto-reviewed")), "toast still fires");
+    assert.strictEqual(
+      notifyCalls.filter((n) => n.msg.includes("Memory auto-reviewed")).length,
+      0,
+      "direct transport shows the clickable block — no redundant toast",
+    );
     assert.strictEqual(appendedEntries.length, 1);
     assert.strictEqual(appendedEntries[0].type, SAVED_MEMORY_ENTRY_TYPE);
     const details = appendedEntries[0].data as { count: number; entries: Array<{ action: string; content: string }> };
@@ -765,11 +769,13 @@ describe("setupBackgroundReview", () => {
 
     const renderer = entryRenderers[SAVED_MEMORY_ENTRY_TYPE];
     assert.ok(renderer, "entry renderer registered");
-    const collapsed = renderer({ details }, { expanded: false }, themeStub).render(120).join("\n");
+    // The renderer receives the full CustomEntry — the payload lives on .data
+    // (pi.appendEntry stores it there), not on .details.
+    const collapsed = renderer({ data: details }, { expanded: false }, themeStub).render(120).join("\n");
     assert.match(collapsed, /2 entries/);
     assert.ok(!collapsed.includes("prefers pnpm"), "collapsed hides the content");
 
-    const expanded = renderer({ details }, { expanded: true }, themeStub).render(120).join("\n");
+    const expanded = renderer({ data: details }, { expanded: true }, themeStub).render(120).join("\n");
     assert.ok(expanded.includes("[add][memory] prefers pnpm over npm"));
     assert.ok(expanded.includes("[add][user] uses neovim daily"));
   });

@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`memory-saved` clickable block shows the real saved entries**: the block read `entry.details`, but `pi.appendEntry` stores the payload on `CustomEntry.data` — so the collapsed header always rendered `0 entries` next to a correct `(N new entries)` status toast. The renderer now reads `entry.data`, and the direct transport shows only the clickable block (no redundant toast); the subprocess fallback, which has no block, keeps the toast.
+
 - **Punctuation no longer poisons memory/search term matching**: trailing and leading punctuation (`?`, `!`, `,`, `:`, `;`, `.`, …) is stripped from bare query terms, so an interactive message like `…запись на deploy?` searches for `deploy`, not the never-matching trigram sequence `deploy?`. Quoted phrases keep their punctuation. Previously the trigram FTS index treated `deploy?` as a distinct sequence that never matched stored `deploy`, letting noisy terms dominate OR fallbacks (observed: `будет` pulling in eleven unrelated notification memories while the freshly written `deploy` convention was skipped).
 
 
