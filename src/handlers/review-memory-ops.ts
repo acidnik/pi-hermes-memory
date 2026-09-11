@@ -25,6 +25,8 @@ export interface ApplyReviewOperationsResult {
   skippedCount: number;
   error?: string;
   aborted?: boolean;
+  /** The operations that were actually applied (for user-facing summaries). */
+  applied?: ReviewMemoryOperation[];
 }
 
 export interface DirectReviewResult {
@@ -32,6 +34,8 @@ export interface DirectReviewResult {
   appliedCount: number;
   fallbackReason?: "no_model" | "no_auth" | "aborted" | "parse_error" | "provider_error" | "empty";
   error?: string;
+  /** Details of the applied operations (visible to the user, e.g. in a block). */
+  appliedDetails?: ReviewMemoryOperation[];
 }
 
 export interface RunDirectMemoryCompletionOptions {
@@ -396,7 +400,7 @@ export async function applyReviewOperations(
       return { appliedCount: 0, skippedCount: operations.length, aborted: true };
     }
     return result.success
-      ? { appliedCount: operations.length, skippedCount: 0 }
+      ? { appliedCount: operations.length, skippedCount: 0, applied: operations }
       : {
           appliedCount: 0,
           skippedCount: operations.length,
@@ -406,6 +410,7 @@ export async function applyReviewOperations(
 
   let appliedCount = 0;
   let skippedCount = 0;
+  const applied: ReviewMemoryOperation[] = [];
 
   for (let i = 0; i < operations.length; i++) {
     if (options.signal?.aborted) {
@@ -440,6 +445,7 @@ export async function applyReviewOperations(
           });
           if (result.success) {
             appliedCount++;
+            applied.push({ action: "add", target: rawTarget, content: op.content, category, failure_reason: op.failure_reason, keywords: op.keywords });
           } else {
             skippedCount++;
           }
@@ -447,6 +453,7 @@ export async function applyReviewOperations(
           result = await activeStore.add(memoryTarget, op.content, options.signal, { keywords: op.keywords });
           if (result.success) {
             appliedCount++;
+            applied.push({ action: "add", target: rawTarget, content: op.content, keywords: op.keywords });
           } else {
             skippedCount++;
           }
@@ -461,6 +468,7 @@ export async function applyReviewOperations(
         result = await activeStore.replace(memoryTarget, op.old_text, op.content, options.signal);
         if (result.success) {
           appliedCount++;
+          applied.push({ action: "replace", target: rawTarget, old_text: op.old_text, content: op.content });
         } else {
           skippedCount++;
         }
@@ -474,6 +482,7 @@ export async function applyReviewOperations(
         result = await activeStore.remove(memoryTarget, op.old_text, options.signal);
         if (result.success) {
           appliedCount++;
+          applied.push({ action: "remove", target: rawTarget, old_text: op.old_text });
         } else {
           skippedCount++;
         }
@@ -490,7 +499,7 @@ export async function applyReviewOperations(
     }
   }
 
-  return { appliedCount, skippedCount };
+  return { appliedCount, skippedCount, applied };
 }
 
 function responseText(content: unknown): string {
@@ -646,7 +655,7 @@ export async function runDirectMemoryCompletion(
         return lastResult;
       }
       clearTimeout(timeout);
-      return { ok: true, appliedCount: applied.appliedCount };
+      return { ok: true, appliedCount: applied.appliedCount, appliedDetails: applied.applied };
     } catch (err) {
       if (options.signal?.aborted) {
         clearTimeout(timeout);
