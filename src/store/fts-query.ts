@@ -2,6 +2,16 @@ const FTS5_OPERATOR_PATTERN = /\b(OR|AND|NOT|NEAR)\b/;
 const FTS5_TOKEN_PATTERN = /"([^"]*)"|(\S+)/g;
 const NATURAL_LANGUAGE_CONNECTORS = new Set(['and', 'or', 'not', 'near']);
 
+/** Trailing/leading punctuation (?, ! , : ; . etc.) clings to bare tokens in
+ * interactive messages. FTS5 trigram matching treats "deploy?" as a distinct
+ * sequence that never matches "deploy", so strip non-letter/non-digit edges
+ * from bare terms (quoted phrases are left untouched). */
+const EDGE_NON_WORD = /^[^\p{L}\p{N}%_]+|[^\p{L}\p{N}%_]+$/gu;
+
+function stripEdgePunctuation(term: string): string {
+  return term.replace(EDGE_NON_WORD, '');
+}
+
 // Common English stop words that add noise to FTS5 searches. They are silently
 // dropped from natural-language queries so common filler words cannot dominate
 // the FTS5 ranking or produce misleading "AND"-style misses. The list is
@@ -44,7 +54,7 @@ function collectNaturalLanguageTerms(query: string): string[] {
       continue;
     }
 
-    const rawValue = phrase ?? term ?? '';
+    const rawValue = phrase ?? stripEdgePunctuation(term ?? '');
     if (rawValue.length > 0) terms.push(rawValue);
   }
 
@@ -112,7 +122,7 @@ export function collectLikeTerms(query: string): string[] {
       continue;
     }
 
-    const rawValue = phrase ?? term ?? '';
+    const rawValue = phrase ?? stripEdgePunctuation(term ?? '');
     if (rawValue.length > 0) terms.push(rawValue);
   }
 
