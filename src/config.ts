@@ -51,6 +51,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   projectCharLimit: DEFAULT_PROJECT_CHAR_LIMIT,
   nudgeInterval: DEFAULT_NUDGE_INTERVAL,
   reviewRecentMessages: DEFAULT_REVIEW_RECENT_MESSAGES,
+  reviewDeltaOnly: true,
   reviewEnabled: true,
   reviewTransport: "direct",
   flushOnCompact: true,
@@ -108,6 +109,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.userCharLimit === "number") config.userCharLimit = parsed.userCharLimit;
       if (typeof parsed.nudgeInterval === "number") config.nudgeInterval = parsed.nudgeInterval;
       if (isNonNegativeNumber(parsed.reviewRecentMessages)) config.reviewRecentMessages = parsed.reviewRecentMessages;
+      if (typeof parsed.reviewDeltaOnly === "boolean") config.reviewDeltaOnly = parsed.reviewDeltaOnly;
       if (typeof parsed.reviewEnabled === "boolean") config.reviewEnabled = parsed.reviewEnabled;
       if (isReviewTransport(parsed.reviewTransport)) config.reviewTransport = parsed.reviewTransport;
       if (typeof parsed.flushOnCompact === "boolean") config.flushOnCompact = parsed.flushOnCompact;

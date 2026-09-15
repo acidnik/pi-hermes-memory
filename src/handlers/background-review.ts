@@ -79,6 +79,15 @@ export interface ReviewPromptInput {
   currentMemory: string;
   currentUser: string;
   currentProject: string | null;
+  /** True when `parts` is only the portion since the last auto-review. */
+  fragment?: boolean;
+}
+
+/** Section title for the conversation; marks a delta fragment explicitly. */
+function conversationSectionTitle(input: ReviewPromptInput): string {
+  return input.fragment
+    ? "--- Conversation to Review (new portion since the last auto-review) ---"
+    : "--- Conversation to Review ---";
 }
 
 export function buildSubprocessReviewPrompt(input: ReviewPromptInput): string {
@@ -104,7 +113,7 @@ export function buildSubprocessReviewPrompt(input: ReviewPromptInput): string {
 
   reviewPrompt.push(
     "",
-    "--- Conversation to Review ---",
+    conversationSectionTitle(input),
     input.parts.join("\n\n"),
   );
 
@@ -130,7 +139,7 @@ export function buildDirectReviewUserPrompt(input: ReviewPromptInput): string {
 
   sections.push(
     "",
-    "--- Conversation to Review ---",
+    conversationSectionTitle(input),
     input.parts.join("\n\n"),
   );
 
@@ -211,6 +220,9 @@ export function setupBackgroundReview(
   let turnsSinceReview = 0;
   let toolCallsSinceReview = 0;
   let userTurnCount = 0;
+  // Last session entry already handed to an auto-review: the next run only
+  // reviews the branch portion after it (delta), instead of the whole session.
+  let lastReviewedEntryId: string | undefined;
   let activeReview: Promise<void> | undefined;
   const sessionAbort = new AbortController();
   let shutdownPromise: Promise<void> | undefined;
@@ -296,25 +308,46 @@ export function setupBackgroundReview(
       );
     };
 
-    const runReview = async (): Promise<void> => {
-      if (sessionCancelled()) return;
+    const runReview = async (): Promise<string | undefined> => {
+      if (sessionCancelled()) return undefined;
 
-      let allParts: string[] = [];
+      let entries: ReturnType<typeof ctx.sessionManager.getBranch> = [];
       try {
-        const entries = ctx.sessionManager.getBranch();
-        allParts = collectMessageParts(entries);
+        entries = ctx.sessionManager.getBranch();
       } catch {
-        return;
+        return undefined;
       }
-      if (allParts.length < 4) return;
+
+      // Delta slice: everything after the last reviewed entry. The first run
+      // (no pointer yet) reviews the whole branch; when the pointer is gone
+      // (branch reshaped) fall back to the whole branch too.
+      let scopedEntries = entries;
+      let fragment = false;
+      if (config.reviewDeltaOnly !== false && lastReviewedEntryId) {
+        const anchor = entries.findIndex((entry) => entry.id === lastReviewedEntryId);
+        if (anchor >= 0) {
+          scopedEntries = entries.slice(anchor + 1);
+          fragment = true;
+        }
+      }
+      const lastScopedEntry = scopedEntries.length > 0 ? scopedEntries[scopedEntries.length - 1] : undefined;
+      // Only a real entry id can anchor the next delta slice; entries without
+      // one (legacy/tests) keep the legacy whole-branch behavior.
+      const lastScopedId = lastScopedEntry && typeof lastScopedEntry.id === "string"
+        ? lastScopedEntry.id
+        : undefined;
+
+      const allParts = collectMessageParts(scopedEntries);
+      if (allParts.length < 4) return undefined;
       await options.ensureMemoryReady?.(ctx);
-      if (sessionCancelled()) return;
+      if (sessionCancelled()) return undefined;
 
       const parts = applyRecentMessageLimit(allParts, config.reviewRecentMessages);
       const activeProjectStore = resolveProjectStore(projectStore);
       const activeProjectName = resolveProjectName(projectName);
       const promptInput: ReviewPromptInput = {
         parts,
+        fragment,
         currentMemory: store.getMemoryEntries().join("\n§\n"),
         currentUser: store.getUserEntries().join("\n§\n"),
         currentProject: activeProjectStore ? activeProjectStore.getMemoryEntries().join("\n§\n") : null,
@@ -345,27 +378,32 @@ export function setupBackgroundReview(
             activeProjectName,
           );
 
-          if (sessionCancelled()) return;
+          if (sessionCancelled()) return undefined;
 
           if (directResult.ok) {
             notifyIfSaved(shouldNotifyDirect(directResult), directResult.appliedCount, directResult.appliedDetails);
-            return;
+            return lastScopedId;
           }
 
-          if (directResult.fallbackReason === "empty" || directResult.fallbackReason === "aborted") {
-            return;
+          if (directResult.fallbackReason === "empty") {
+            // The model ran over the fragment and found nothing new — the
+            // fragment is still "seen", so advance the pointer.
+            return lastScopedId;
+          }
+          if (directResult.fallbackReason === "aborted") {
+            return undefined;
           }
           directFailure = [
             directResult.fallbackReason ?? "failed",
             directResult.error,
           ].filter(Boolean).join(": ");
         } catch (error) {
-          if (sessionCancelled()) return;
+          if (sessionCancelled()) return undefined;
           directFailure = diagnosticDetail(error);
         }
       }
 
-      if (sessionCancelled()) return;
+      if (sessionCancelled()) return undefined;
 
       let subprocessResult: { code: number; stdout?: string; stderr?: string };
       try {
@@ -381,24 +419,32 @@ export function setupBackgroundReview(
         if (directFailure) {
           notifyTransportFailure(directFailure, error);
         }
-        return;
+        return undefined;
       }
 
-      if (sessionCancelled()) return;
+      if (sessionCancelled()) return undefined;
 
       if (subprocessResult.code === 0) {
         notifyIfSaved(shouldNotifySubprocess(subprocessResult.stdout));
-      } else if (directFailure) {
+        return lastScopedId;
+      }
+      if (directFailure) {
         const subprocessDetail = subprocessResult.stderr?.trim() || subprocessResult.stdout?.trim()
           || `exit code ${subprocessResult.code}`;
         notifyTransportFailure(directFailure, subprocessDetail);
       }
+      return undefined;
     };
 
     // Occupy the in-flight slot before runReview's synchronous preamble so a
-    // nested turn_end cannot start a second review.
+    // nested turn_end cannot start a second review. runReview resolves to the
+    // last reviewed entry id when the fragment was actually seen, so a failed
+    // review leaves the pointer where it was and is retried next nudge.
     activeReview = Promise.resolve()
       .then(() => runReview())
+      .then((reviewedThrough) => {
+        if (typeof reviewedThrough === "string") lastReviewedEntryId = reviewedThrough;
+      })
       .catch(() => {
         // Best-effort only; transport failures are diagnosed after both paths settle.
       })
