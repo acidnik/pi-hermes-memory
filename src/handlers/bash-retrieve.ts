@@ -42,6 +42,7 @@ import type { AutoRetrieveTarget, MemoryConfig } from "../types.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_BASH_RETRIEVE_MAX_CHARS,
+  DEFAULT_BASH_RETRIEVE_MIN_MATCHED_TERMS,
   DEFAULT_BASH_RETRIEVE_MIN_TERMS,
   DEFAULT_BASH_RETRIEVE_TOP_K,
 } from "../constants.js";
@@ -190,6 +191,7 @@ export function setupBashRetrieve(
   const topK = Math.max(1, bashRetrieve.topK ?? DEFAULT_BASH_RETRIEVE_TOP_K);
   const maxChars = Math.max(1, bashRetrieve.maxChars ?? DEFAULT_BASH_RETRIEVE_MAX_CHARS);
   const minTerms = Math.max(1, bashRetrieve.minTerms ?? DEFAULT_BASH_RETRIEVE_MIN_TERMS);
+  const minMatchedTerms = Math.max(2, bashRetrieve.minMatchedTerms ?? DEFAULT_BASH_RETRIEVE_MIN_MATCHED_TERMS);
   const targets: readonly AutoRetrieveTarget[] =
     bashRetrieve.targets && bashRetrieve.targets.length > 0 ? bashRetrieve.targets : DEFAULT_TARGETS;
 
@@ -204,7 +206,9 @@ export function setupBashRetrieve(
     const collected: SqliteMemoryEntry[] = [];
     const seen = new Set<number>();
     for (const target of targets) {
-      for (const entry of searchMemories(dbManager, query, { target, projects, limit: topK })) {
+      for (const entry of searchMemories(dbManager, query, {
+        target, projects, limit: topK, requireMatchedTerms: minMatchedTerms,
+      })) {
         if (seen.has(entry.id)) continue;
         seen.add(entry.id);
         collected.push(entry);
@@ -263,7 +267,7 @@ export function setupBashRetrieve(
         customType: RETRIEVAL_MESSAGE_TYPE,
         content: renderBashRetrieveBlock(picked),
         display: true,
-        details: buildRetrievalDetails(picked),
+        details: buildRetrievalDetails(picked, terms),
       });
     } catch {
       // Retrieval must never break the tool result.

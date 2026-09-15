@@ -53,6 +53,7 @@ async function fireRetrieval(harness: Harness, prompt: string): Promise<SentMess
 const themeStub = {
   fg: (_color: string, text: string) => text,
   bg: (_color: string, text: string) => text,
+  bold: (text: string) => `**${text}**`,
 };
 
 function createHarness(config: MemoryConfig, opts: {
@@ -114,25 +115,25 @@ function baseConfig(overrides: Record<string, unknown> = {}): MemoryConfig {
 
 function seedMemories(): void {
   syncMemoryEntry(dbManager, {
-    content: "deployment runs on kubernetes with postgresql databases",
+    content: "deployment runs on kubernetes vault with postgresql databases",
     target: "memory",
     project: null,
     keywords: ["k8s", "кубернетес"],
   });
   syncMemoryEntry(dbManager, {
-    content: "current project uses a monorepo layout",
+    content: "current project uses a monorepo kubernetes layout",
     target: "memory",
     project: "project-a",
     keywords: ["monorepo", "layout"],
   });
   syncMemoryEntry(dbManager, {
-    content: "other project hides secrets in vault",
+    content: "other project hides secrets in vault kubernetes config",
     target: "memory",
     project: "project-b",
     keywords: ["vault", "secrets"],
   });
   syncMemoryEntry(dbManager, {
-    content: "do not parallelize database tests",
+    content: "do not parallelize database tests, kubernetes vault migrations",
     target: "failure",
     category: "correction",
     keywords: ["tests", "параллельно"],
@@ -297,11 +298,13 @@ describe("auto-retrieve", () => {
     const collapsed = renderer(message, { expanded: false }, themeStub).render(120).join("\n");
     assert.match(collapsed, /Retrieved 3 entries/);
     assert.ok(collapsed.includes("k8s"));
+    assert.ok(collapsed.includes("in: kubernetes"), "collapsed header shows trigger words");
     assert.match(collapsed, /ctrl\+o to expand/);
     assert.ok(!collapsed.includes("current project uses a monorepo"), "collapsed hides the full content");
 
     const expanded = renderer(message, { expanded: true }, themeStub).render(120).join("\n");
-    assert.ok(expanded.includes("current project uses a monorepo"));
+    assert.ok(expanded.includes("current project uses a **monorepo**"));
+    assert.ok(expanded.includes("**monorepo**"), "matched terms are bolded in the expanded block");
     assert.ok(expanded.includes("[project:project-a]"));
     assert.ok(!expanded.includes("to expand"));
   });
@@ -415,5 +418,31 @@ describe("auto-retrieve", () => {
     ready = true;
     const injected = await handlers2.before_agent_start[0]({ type: "before_agent_start", prompt: QUERY }, ctx2) as any;
     assert.ok(injected?.message, "after initialization retrieval runs");
+  });
+  it("carries trigger terms and per-entry matched terms in details", async () => {
+    seedMemories();
+    const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
+    const message = (await fireRetrieval(harness, QUERY))!;
+    const details = message.details as {
+      triggers: string[];
+      entries: Array<{ matchedTerms: string[]; content: string }>;
+    };
+    assert.deepStrictEqual(details.triggers, ["kubernetes", "monorepo", "vault", "parallelize"]);
+    const globalEntry = details.entries.find((e) => e.content.includes("deployment runs on kubernetes"))!;
+    assert.ok(globalEntry.matchedTerms.includes("kubernetes"));
+    assert.ok(globalEntry.matchedTerms.includes("vault"));
+  });
+
+  it("minMatchedTerms raises the relevance bar", async () => {
+    seedMemories();
+    const harness = createHarness(
+      baseConfig({ autoRetrieve: { enabled: true, minMatchedTerms: 3 } }),
+      { project: "project-a" },
+    );
+    const message = await fireRetrieval(harness, QUERY);
+    assert.ok(message, "failure entry matches 3 terms and is still injected");
+    const details = message.details as { count: number; entries: Array<{ content: string }> };
+    assert.equal(details.count, 1, "only the 3-term failure entry passes");
+    assert.ok(details.entries[0].content.includes("parallelize database tests"));
   });
 });

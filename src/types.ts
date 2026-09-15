@@ -37,6 +37,13 @@ export interface AutoRetrieveConfig {
   targets?: AutoRetrieveTarget[];
   /** Minimum query length before retrieval runs. Default: 12 */
   minQueryChars?: number;
+  /**
+   * Minimum distinct query terms a memory must match to be injected. When > 1
+   * the search is a single OR query (BM25 ranked) gated by this count — no
+   * AND stage and no recency fallback, so weakly related memories stay out.
+   * Default: 2
+   */
+  minMatchedTerms?: number;
 }
 
 /**
@@ -57,6 +64,13 @@ export interface BashRetrieveConfig {
   targets?: AutoRetrieveTarget[];
   /** Minimum meaningful terms in the command before searching. Default: 1 */
   minTerms?: number;
+  /**
+   * Minimum distinct query terms a memory must match to be injected. When > 1
+   * the search is a single OR query (BM25 ranked) gated by this count — no
+   * AND stage and no recency fallback, so weakly related memories stay out.
+   * Default: 2
+   */
+  minMatchedTerms?: number;
 }
 
 export interface MemoryConfig {
