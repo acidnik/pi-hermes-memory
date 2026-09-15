@@ -4,6 +4,7 @@ import {
   buildFallbackFts5Query,
   buildNaturalLanguageFallbackQuery,
   collectLikeTerms,
+  collectNaturalLanguageTerms,
   isFts5QueryError,
   normalizeFts5Query,
   normalizeNaturalLanguageFts5Query,
@@ -61,6 +62,8 @@ export interface SqliteMemoryEntry {
   correctedTo: string | null;
   created: string;
   lastReferenced: string;
+  /** Query terms that matched this entry (filled only by gated searches). */
+  matchedTerms?: string[];
 }
 
 export interface SqliteMemorySyncInput {
@@ -1007,6 +1010,13 @@ export function searchMemories(
     target?: string;
     category?: MemoryCategory;
     limit?: number;
+    /**
+     * When > 1, run a single OR query ranked by BM25 and keep only entries
+     * matching at least this many distinct query terms — no AND stage, no
+     * LIKE fallback, so weakly-related entries never surface. Gated entries
+     * also carry the matched terms in `matchedTerms`.
+     */
+    requireMatchedTerms?: number;
   } = {}
 ): SqliteMemoryEntry[] {
   if (query.trim().length === 0) {
@@ -1014,7 +1024,7 @@ export function searchMemories(
   }
 
   const db = dbManager.getDb();
-  const { project, target, category, limit = 10 } = options;
+  const { project, target, category, limit = 10, requireMatchedTerms } = options;
   const projectScopes: Array<string | null> | undefined = options.projects !== undefined
     ? options.projects
     : project !== undefined
@@ -1029,7 +1039,7 @@ export function searchMemories(
 
   let ftsParseError = false;
 
-  const runSearch = (matchQuery: string): SqliteMemoryEntry[] => {
+  const runSearch = (matchQuery: string, rowLimit: number = limit): SqliteMemoryEntry[] => {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
@@ -1059,7 +1069,7 @@ export function searchMemories(
     `;
 
     try {
-      const rows = db.prepare(sql).all(...params, limit) as Array<{
+      const rows = db.prepare(sql).all(...params, rowLimit) as Array<{
         id: number;
         project: string | null;
         target: string;
@@ -1169,6 +1179,43 @@ export function searchMemories(
     }>;
     return rows.map(mapRow);
   };
+
+  // Gated relevance: single OR query (BM25-ranked), keep only entries matching
+  // at least `requireMatchedTerms` distinct terms, and never fall back to
+  // LIKE/recency — weakly related entries must not surface. The matched terms
+  // travel with each entry so the UI can highlight them.
+  if (requireMatchedTerms && requireMatchedTerms > 1) {
+    const terms = collectNaturalLanguageTerms(query);
+    if (terms.length < requireMatchedTerms) return [];
+
+    const quote = (term: string): string => `"${term.replace(/"/g, '""')}"`;
+    const orQuery = terms.map(quote).join(' OR ');
+    const candidates = runSearch(orQuery, limit * 3);
+    if (candidates.length === 0) return [];
+
+    // NOTE: `MATCH ? AND rowid = ?` on the same FTS5 table ignores the rowid
+    // filter (SQLite FTS5 quirk), so per-term rowid sets are resolved first
+    // and matched-term counts are computed in JS.
+    const termRowids = new Map<string, Set<number>>();
+    const byRow = db.prepare('SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?');
+    for (const term of terms) {
+      const rows = byRow.all(quote(term)) as Array<{ rowid: number }>;
+      termRowids.set(term, new Set(rows.map((row) => Number(row.rowid))));
+    }
+
+    const collected: SqliteMemoryEntry[] = [];
+    for (const entry of candidates) {
+      const matched: string[] = [];
+      for (const term of terms) {
+        if (termRowids.get(term)?.has(entry.id)) matched.push(term);
+      }
+      if (matched.length < requireMatchedTerms) continue;
+      entry.matchedTerms = matched;
+      collected.push(entry);
+      if (collected.length >= limit) break;
+    }
+    return collected;
+  }
 
   if (normalizedQuery.length === 0) {
     return runLiteralLikeFallback();

@@ -257,7 +257,8 @@ describe("setupBashRetrieve", () => {
     assert.ok(sent.content.includes("<retrieved-memory>"));
     assert.ok(sent.content.includes("match the command you just ran"));
     assert.ok(sent.content.includes("npm run build runs the full type check"));
-    assert.strictEqual(sent.details?.count, 2);
+    assert.strictEqual(sent.details?.count, 1);
+    assert.deepStrictEqual(sent.details?.triggers, ["npm", "run", "build"]);
   });
 
   it("does nothing for non-bash tool results", async () => {

@@ -38,9 +38,11 @@ import type { DatabaseManager } from "../store/db.js";
 import type { AutoRetrieveTarget, MemoryConfig } from "../types.js";
 import {
   DEFAULT_AUTO_RETRIEVE_MAX_CHARS,
+  DEFAULT_AUTO_RETRIEVE_MIN_MATCHED_TERMS,
   DEFAULT_AUTO_RETRIEVE_MIN_QUERY_CHARS,
   DEFAULT_AUTO_RETRIEVE_TOP_K,
 } from "../constants.js";
+import { collectNaturalLanguageTerms } from "../store/fts-query.js";
 
 export const RETRIEVAL_MESSAGE_TYPE = "memory-retrieval";
 
@@ -54,24 +56,63 @@ export interface RetrievalEntryView {
   project: string | null;
   category: string | null;
   content: string;
+  /** Query terms this entry matched (used to bold them in the renderer). */
+  matchedTerms?: string[];
 }
 
 export interface RetrievalDetails {
   count: number;
   keywords: string;
+  /** Significant query terms the match was based on (shown in the collapsed header). */
+  triggers?: string[];
   entries: RetrievalEntryView[];
 }
 
+/**
+ * Highlight the query terms a memory entry matched, wrapping each occurrence
+ * with `mark`. Pure helper so the renderer can bold them (theme.bold).
+ * Longest matching term wins on overlaps; matching is case-insensitive.
+ */
+export function highlightMatchedTerms(
+  content: string,
+  terms: string[],
+  mark: (text: string) => string,
+): string {
+  if (content.length === 0 || terms.length === 0) return content;
+  const lower = content.toLowerCase();
+  const lowerTerms = terms.map((term) => term.toLowerCase()).filter((t) => t.length > 0).sort((a, b) => b.length - a.length);
+  let out = "";
+  for (let i = 0; i < lower.length;) {
+    let hit: string | null = null;
+    for (const term of lowerTerms) {
+      if (lower.startsWith(term, i)) { hit = term; break; }
+    }
+    if (hit) {
+      out += mark(content.slice(i, i + hit.length));
+      i += hit.length;
+    } else {
+      out += content[i];
+      i += 1;
+    }
+  }
+  return out;
+}
+
 /** Shared by auto-retrieve and bash-retrieve for the same transcript renderer. */
-export function buildRetrievalDetails(entries: SqliteMemoryEntry[]): RetrievalDetails {
+export function buildRetrievalDetails(
+  entries: SqliteMemoryEntry[],
+  triggers: string[] = [],
+): RetrievalDetails {
   return {
     count: entries.length,
     keywords: keywordPreview(entries),
+    triggers: triggers.slice(0, 6),
     entries: entries.map((entry) => ({
       target: entry.target,
       project: entry.project,
       category: entry.category,
       content: entry.content.length > 500 ? `${entry.content.slice(0, 500)}…` : entry.content,
+      matchedTerms: entry.matchedTerms?.slice() ?? [],
     })),
   };
 }
@@ -199,19 +240,26 @@ class RetrievalBlockComponent extends Container {
 export function renderRetrievalMessage(
   message: { details?: unknown },
   options: { expanded: boolean },
-  theme: { fg: (color: string, text: string) => string },
+  theme: { fg: (color: string, text: string) => string; bold: (text: string) => string },
 ): Component {
   const details = message.details as RetrievalDetails | undefined;
   const entries = Array.isArray(details?.entries) ? details!.entries : [];
   const count = entries.length;
   const label = `${count} ${count === 1 ? "entry" : "entries"}`;
   const header = theme.fg("accent", `🧠 Retrieved ${label}`)
-    + (details?.keywords ? theme.fg("muted", `: ${details.keywords}`) : "");
+    + (details?.keywords ? theme.fg("muted", `: ${details.keywords}`) : "")
+    + (details?.triggers && details.triggers.length > 0
+      ? theme.fg("muted", ` · in: ${details.triggers.join(", ")}`)
+      : "");
 
   return new RetrievalBlockComponent(
     () => ({
       collapsed: [header, theme.fg("muted", `   ${expandKeyHint()} to expand (or click)`),],
-      expanded: [header, "", ...entries.map((entry) => `${theme.fg("muted", `- [${scopeLabel(entry)}] `)}${entry.content}`)],
+      expanded: [
+        header,
+        "",
+        ...entries.map((entry) => `${theme.fg("muted", `- [${scopeLabel(entry)}] `)}${highlightMatchedTerms(entry.content, entry.matchedTerms ?? [], (s) => theme.bold(s))}`),
+      ],
     }),
     options.expanded,
   );
@@ -248,6 +296,7 @@ export function setupAutoRetrieve(
   const topK = Math.max(1, autoRetrieve.topK ?? DEFAULT_AUTO_RETRIEVE_TOP_K);
   const maxChars = Math.max(1, autoRetrieve.maxChars ?? DEFAULT_AUTO_RETRIEVE_MAX_CHARS);
   const minQueryChars = Math.max(1, autoRetrieve.minQueryChars ?? DEFAULT_AUTO_RETRIEVE_MIN_QUERY_CHARS);
+  const minMatchedTerms = Math.max(2, autoRetrieve.minMatchedTerms ?? DEFAULT_AUTO_RETRIEVE_MIN_MATCHED_TERMS);
   const targets: readonly AutoRetrieveTarget[] =
     autoRetrieve.targets && autoRetrieve.targets.length > 0 ? autoRetrieve.targets : DEFAULT_TARGETS;
 
@@ -260,7 +309,9 @@ export function setupAutoRetrieve(
     const collected: SqliteMemoryEntry[] = [];
     const seen = new Set<number>();
     for (const target of targets) {
-      for (const entry of searchMemories(dbManager, query, { target, projects, limit: topK })) {
+      for (const entry of searchMemories(dbManager, query, {
+        target, projects, limit: topK, requireMatchedTerms: minMatchedTerms,
+      })) {
         if (seen.has(entry.id)) continue;
         seen.add(entry.id);
         collected.push(entry);
@@ -316,7 +367,7 @@ export function setupAutoRetrieve(
           customType: RETRIEVAL_MESSAGE_TYPE,
           content: renderRetrievalBlock(picked),
           display: true,
-          details: buildRetrievalDetails(picked),
+          details: buildRetrievalDetails(picked, collectNaturalLanguageTerms(trimmed)),
         },
       };
     } catch {

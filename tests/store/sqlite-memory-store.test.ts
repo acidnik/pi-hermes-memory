@@ -899,6 +899,38 @@ describe('sqlite-memory-store', () => {
 
       assert.ok(results.some((r) => r.content.includes('find /')));
     });
+
+    it('requireMatchedTerms keeps only entries matching enough distinct terms', () => {
+      addMemory(dbManager, 'ebra cafa gamma notes'); // ebra + cafa = 2
+      addMemory(dbManager, 'ebra only candidate'); // ebra only = 1
+
+      const results = searchMemories(dbManager, 'ebra cafa eborz', { requireMatchedTerms: 2 });
+      assert.strictEqual(results.length, 1);
+      assert.ok(results[0].content.includes('gamma'));
+      assert.deepStrictEqual(results[0].matchedTerms, ['ebra', 'cafa']);
+    });
+
+    it('requireMatchedTerms returns empty instead of the recency LIKE fallback', () => {
+      addMemory(dbManager, 'recent fresh note with unique vocabulary zorptastic');
+
+      // With the old fallback the LIKE path would surface the recent entry; the
+      // gated path must return nothing when fewer than 2 terms match.
+      const results = searchMemories(dbManager, 'zorptastic unrelatedword', { requireMatchedTerms: 2 });
+      assert.strictEqual(results.length, 0);
+    });
+
+    it('requireMatchedTerms takes the bar from total significant terms', () => {
+      addMemory(dbManager, 'docker compose redis cache');
+      addMemory(dbManager, 'docker redis stack');
+
+      // 3 significant terms, gate 3 → only the full entry passes.
+      const gate3 = searchMemories(dbManager, 'docker redis cache', { requireMatchedTerms: 3 });
+      assert.strictEqual(gate3.length, 1);
+      assert.deepStrictEqual(gate3[0].matchedTerms, ['docker', 'redis', 'cache']);
+
+      const gate4 = searchMemories(dbManager, 'docker redis cache', { requireMatchedTerms: 4 });
+      assert.strictEqual(gate4.length, 0, 'bar above term count returns empty');
+    });
   });
 
   describe('getMemories', () => {
