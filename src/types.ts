@@ -101,6 +101,13 @@ export interface MemoryConfig {
   nudgeInterval: number;
   /** Recent conversation messages included in background review. 0 = all. Default: 0 */
   reviewRecentMessages?: number;
+  /**
+   * Review only the conversation portion not yet seen by a previous
+   * auto-review of this session (delta since the last run) instead of the
+   * whole branch every time. Default: true — saves tokens; the prompt marks
+   * the fragment and the current-memory section guards duplicates.
+   */
+  reviewDeltaOnly?: boolean;
   /** Enable background learning loop. Default: true */
   reviewEnabled: boolean;
   /** How background review invokes the LLM. Default: direct */

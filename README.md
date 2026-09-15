@@ -539,6 +539,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "nudgeInterval": 10,
   "nudgeToolCalls": 15,
   "reviewRecentMessages": 0,
+  "reviewDeltaOnly": true,
   "reviewEnabled": true,
   "reviewTransport": "direct",
   "memoryOverflowStrategy": "auto-consolidate",
@@ -582,6 +583,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `nudgeInterval` | `10` | Turns between auto-reviews |
 | `nudgeToolCalls` | `15` | Tool calls between auto-reviews (OR with turns) |
 | `reviewRecentMessages` | `0` | Recent messages included in background review (`0` = all) |
+| `reviewDeltaOnly` | `true` | Background review consumes only the conversation portion not seen by a previous auto-review of the session (delta since the last run) instead of resending the whole branch every N turns — the prompt marks the fragment and the current-memory section guards duplicates. Set `false` to review the whole session on every run |
 | `reviewEnabled` | `true` | Enable/disable background learning loop |
 | `reviewTransport` | `direct` | LLM transport for background review, session flush, correction save, and manual consolidation: `direct` uses in-process `completeSimple()` with subprocess fallback; `subprocess` forces legacy `pi -p` only |
 | `memoryOverflowStrategy` | `auto-consolidate` | Legacy-inject behavior when a Markdown memory file reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |

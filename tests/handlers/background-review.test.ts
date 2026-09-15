@@ -85,6 +85,18 @@ function createMockPi(execReturn?: { code: number; stdout: string; stderr: strin
   } as any;
 }
 
+function makeBranchWithIds(prefix: string, count: number, startIndex: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    type: "message",
+    id: `${prefix}-${startIndex + i}`,
+    message: {
+      role: (startIndex + i) % 2 === 0 ? "user" : "assistant",
+      content: [{ type: "text", text: `Fragment ${prefix} message ${startIndex + i} with enough content here` }],
+      timestamp: startIndex + i,
+    },
+  }));
+}
+
 function makeBranch(numMessages: number) {
   return Array.from({ length: numMessages }, (_, i) => ({
     type: "message",
@@ -1174,5 +1186,64 @@ describe("setupBackgroundReview", () => {
 
     // Should not throw — we got here = test passed
     assert.ok(true, "no crash when getBranch throws");
+  });
+
+  it("reviews only the conversation portion not seen by the previous review", async () => {
+    const pi = createMockPi();
+    setup(pi, defaultConfig);
+    fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+
+    const first = makeBranchWithIds("a", 6, 0);
+    for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(first);
+    await settle();
+    assert.strictEqual(execCalls.length, 1);
+    assert.ok(reviewPrompt(0).includes("Fragment a message 0"), "first review sees the whole branch");
+    assert.ok(!reviewPrompt(0).includes("new portion since the last auto-review"), "first review is not marked as a fragment");
+
+    const second = [...first, ...makeBranchWithIds("b", 4, 6)];
+    for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(second);
+    await settle();
+    assert.strictEqual(execCalls.length, 2);
+    const prompt = reviewPrompt(1);
+    assert.ok(prompt.includes("Fragment b message 6"), "only the new fragment is reviewed");
+    assert.ok(!prompt.includes("Fragment a message 0"), "already-reviewed portion is not resent");
+    assert.ok(prompt.includes("new portion since the last auto-review"), "the prompt marks the fragment");
+  });
+
+  it("retries the same fragment when every transport fails (pointer not advanced)", async () => {
+    const pi = createMockPi({ code: 1, stdout: "", stderr: "boom" });
+    setup(pi, defaultConfig);
+    fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+
+    const first = makeBranchWithIds("a", 6, 0);
+    for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(first);
+    await settle();
+    assert.strictEqual(execCalls.length, 1);
+
+    const second = [...first, ...makeBranchWithIds("b", 4, 6)];
+    for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(second);
+    await settle();
+    assert.strictEqual(execCalls.length, 2);
+    assert.ok(reviewPrompt(1).includes("Fragment a message 0"), "failed review retries the unseen portion");
+  });
+
+  it("reviewDeltaOnly:false re-sends the whole branch on every review", async () => {
+    const pi = createMockPi();
+    setup(pi, { ...defaultConfig, reviewDeltaOnly: false } as MemoryConfig);
+    fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+
+    const first = makeBranchWithIds("a", 6, 0);
+    for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(first);
+    await settle();
+
+    const second = [...first, ...makeBranchWithIds("b", 4, 6)];
+    for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(second);
+    await settle();
+
+    assert.strictEqual(execCalls.length, 2);
+    const prompt = reviewPrompt(1);
+    assert.ok(prompt.includes("Fragment a message 0"), "full-session mode keeps the old portion");
+    assert.ok(prompt.includes("Fragment b message 6"));
+    assert.ok(!prompt.includes("new portion since the last auto-review"), "not marked as a fragment");
   });
 });
