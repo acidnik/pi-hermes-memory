@@ -427,10 +427,15 @@ describe("auto-retrieve", () => {
       triggers: string[];
       entries: Array<{ matchedTerms: string[]; content: string }>;
     };
-    assert.deepStrictEqual(details.triggers, ["kubernetes", "monorepo", "vault", "parallelize"]);
+    assert.deepStrictEqual([...details.triggers].sort(), ["kubernetes", "monorepo", "parallelize", "vault"], "triggers are the terms that actually matched");
     const globalEntry = details.entries.find((e) => e.content.includes("deployment runs on kubernetes"))!;
     assert.ok(globalEntry.matchedTerms.includes("kubernetes"));
     assert.ok(globalEntry.matchedTerms.includes("vault"));
+    for (const entry of details.entries) {
+      for (const term of entry.matchedTerms) {
+        assert.ok(details.triggers.includes(term), `trigger list carries the bolded term: ${term}`);
+      }
+    }
   });
 
   it("minMatchedTerms raises the relevance bar", async () => {
