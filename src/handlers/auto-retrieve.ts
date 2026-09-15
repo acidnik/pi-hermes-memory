@@ -101,8 +101,19 @@ export function highlightMatchedTerms(
 /** Shared by auto-retrieve and bash-retrieve for the same transcript renderer. */
 export function buildRetrievalDetails(
   entries: SqliteMemoryEntry[],
-  triggers: string[] = [],
+  fallbackTriggers: string[] = [],
 ): RetrievalDetails {
+  // "in:" must list the terms that actually matched — the same ones the
+  // renderer bolds below — so it is derived from the entries' matchedTerms.
+  // The caller's query terms are only a fallback (ungated searches).
+  const matched = new Set<string>();
+  for (const entry of entries) {
+    for (const term of entry.matchedTerms ?? []) {
+      const normalized = term.trim();
+      if (normalized.length > 0) matched.add(normalized);
+    }
+  }
+  const triggers = matched.size > 0 ? [...matched] : fallbackTriggers;
   return {
     count: entries.length,
     keywords: keywordPreview(entries),
