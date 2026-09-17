@@ -37,6 +37,7 @@ import {
 import type { DatabaseManager } from "../store/db.js";
 import type { AutoRetrieveTarget, MemoryConfig } from "../types.js";
 import {
+  DEFAULT_AUTO_RETRIEVE_KEYWORDS_ONLY,
   DEFAULT_AUTO_RETRIEVE_MAX_CHARS,
   DEFAULT_AUTO_RETRIEVE_MIN_MATCHED_TERMS,
   DEFAULT_AUTO_RETRIEVE_MIN_QUERY_CHARS,
@@ -253,6 +254,7 @@ export function setupAutoRetrieve(
   const maxChars = Math.max(1, autoRetrieve.maxChars ?? DEFAULT_AUTO_RETRIEVE_MAX_CHARS);
   const minQueryChars = Math.max(1, autoRetrieve.minQueryChars ?? DEFAULT_AUTO_RETRIEVE_MIN_QUERY_CHARS);
   const minMatchedTerms = Math.max(2, autoRetrieve.minMatchedTerms ?? DEFAULT_AUTO_RETRIEVE_MIN_MATCHED_TERMS);
+  const keywordsOnly = autoRetrieve.keywordsOnly ?? DEFAULT_AUTO_RETRIEVE_KEYWORDS_ONLY;
   const targets: readonly AutoRetrieveTarget[] =
     autoRetrieve.targets && autoRetrieve.targets.length > 0 ? autoRetrieve.targets : DEFAULT_TARGETS;
 
@@ -266,7 +268,7 @@ export function setupAutoRetrieve(
     const seen = new Set<number>();
     for (const target of targets) {
       for (const entry of searchMemories(dbManager, query, {
-        target, projects, limit: topK, requireMatchedTerms: minMatchedTerms,
+        target, projects, limit: topK, requireMatchedTerms: minMatchedTerms, keywordsOnly,
       })) {
         if (seen.has(entry.id)) continue;
         seen.add(entry.id);

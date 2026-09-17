@@ -118,25 +118,25 @@ function seedMemories(): void {
     content: "deployment runs on kubernetes vault with postgresql databases",
     target: "memory",
     project: null,
-    keywords: ["k8s", "кубернетес"],
+    keywords: ["k8s", "kubernetes", "кубернетес", "vault"],
   });
   syncMemoryEntry(dbManager, {
     content: "current project uses a monorepo kubernetes layout",
     target: "memory",
     project: "project-a",
-    keywords: ["monorepo", "layout"],
+    keywords: ["monorepo", "kubernetes", "layout"],
   });
   syncMemoryEntry(dbManager, {
     content: "other project hides secrets in vault kubernetes config",
     target: "memory",
     project: "project-b",
-    keywords: ["vault", "secrets"],
+    keywords: ["vault", "kubernetes", "secrets"],
   });
   syncMemoryEntry(dbManager, {
     content: "do not parallelize database tests, kubernetes vault migrations",
     target: "failure",
     category: "correction",
-    keywords: ["tests", "параллельно"],
+    keywords: ["tests", "parallelize", "kubernetes", "vault", "параллельно"],
   });
 }
 

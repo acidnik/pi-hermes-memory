@@ -12,11 +12,13 @@ export const DEFAULT_AUTO_RETRIEVE_TOP_K = 3;
 export const DEFAULT_AUTO_RETRIEVE_MAX_CHARS = 1500;
 export const DEFAULT_AUTO_RETRIEVE_MIN_QUERY_CHARS = 12;
 export const DEFAULT_AUTO_RETRIEVE_MIN_MATCHED_TERMS = 2;
+export const DEFAULT_AUTO_RETRIEVE_KEYWORDS_ONLY = true;
 
 export const DEFAULT_BASH_RETRIEVE_TOP_K = 4;
 export const DEFAULT_BASH_RETRIEVE_MAX_CHARS = 1500;
 export const DEFAULT_BASH_RETRIEVE_MIN_TERMS = 1;
 export const DEFAULT_BASH_RETRIEVE_MIN_MATCHED_TERMS = 2;
+export const DEFAULT_BASH_RETRIEVE_KEYWORDS_ONLY = true;
 
 // ─── Directory names ───
 export const DEFAULT_PROJECTS_MEMORY_DIR = "projects-memory";
@@ -237,7 +239,8 @@ Operation fields:
 - content: required for add/replace
 - old_text: required for replace/remove (substring match)
 - category: for failure target — failure | correction | insight | convention | tool-quirk | preference
-- failure_reason: optional context for failure entries`;
+- failure_reason: optional context for failure entries
+- keywords: optional array of searchable synonyms/equivalents (other languages, technical terms, inflections)`;
 
 export const DIRECT_REVIEW_SYSTEM_PROMPT = `You review coding conversations and extract durable memories worth saving across sessions.
 

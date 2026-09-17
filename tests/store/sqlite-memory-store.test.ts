@@ -663,6 +663,25 @@ describe('sqlite-memory-store', () => {
       const gate4 = searchMemories(dbManager, 'docker redis cache', { requireMatchedTerms: 4 });
       assert.strictEqual(gate4.length, 0, 'bar above term count returns empty');
     });
+
+    it('keywordsOnly matches the keywords column and ignores full content', () => {
+      // Word only in content is invisible; a keyword-list word matches even
+      // when it never appears in the content text.
+      addMemory(dbManager, 'the content mentions kubernetes but no keywords');
+
+      const noHits = searchMemories(dbManager, 'kubernetes monorepo', { requireMatchedTerms: 2, keywordsOnly: true });
+      assert.strictEqual(noHits.length, 0, 'content-only words do not match in keywordsOnly mode');
+
+      syncMemoryEntry(dbManager, {
+        content: 'a fact about nothing in particular',
+        target: 'memory',
+        project: null,
+        keywords: ['kubernetes', 'monorepo'],
+      });
+      const hits = searchMemories(dbManager, 'kubernetes monorepo', { requireMatchedTerms: 2, keywordsOnly: true });
+      assert.strictEqual(hits.length, 1);
+      assert.deepStrictEqual(hits[0].matchedTerms, ['kubernetes', 'monorepo']);
+    });
   });
 
   describe('getMemories', () => {
