@@ -939,6 +939,12 @@ export function searchMemories(
      * also carry the matched terms in `matchedTerms`.
      */
     requireMatchedTerms?: number;
+    /**
+     * Match ONLY against the curated keywords column (FTS column filter),
+     * never full content. Used by retrieval; entries without keywords are
+     * not found.
+     */
+    keywordsOnly?: boolean;
   } = {}
 ): SqliteMemoryEntry[] {
   if (query.trim().length === 0) {
@@ -946,7 +952,7 @@ export function searchMemories(
   }
 
   const db = dbManager.getDb();
-  const { project, target, category, limit = 10, requireMatchedTerms } = options;
+  const { project, target, category, limit = 10, requireMatchedTerms, keywordsOnly } = options;
   const projectScopes: Array<string | null> | undefined = options.projects !== undefined
     ? options.projects
     : project !== undefined
@@ -1110,8 +1116,12 @@ export function searchMemories(
     const terms = collectNaturalLanguageTerms(query);
     if (terms.length < requireMatchedTerms) return [];
 
+    // keywordsOnly restricts every MATCH to the curated keywords column via
+    // the FTS5 column filter (keywords : "term") — full content is ignored.
+    const col = keywordsOnly ? 'keywords : ' : '';
     const quote = (term: string): string => `"${term.replace(/"/g, '""')}"`;
-    const orQuery = terms.map(quote).join(' OR ');
+    const termExpr = (term: string): string => `${col}${quote(term)}`;
+    const orQuery = terms.map(termExpr).join(' OR ');
     const candidates = runSearch(orQuery, limit * 3);
     if (candidates.length === 0) return [];
 
@@ -1121,7 +1131,7 @@ export function searchMemories(
     const termRowids = new Map<string, Set<number>>();
     const byRow = db.prepare('SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?');
     for (const term of terms) {
-      const rows = byRow.all(quote(term)) as Array<{ rowid: number }>;
+      const rows = byRow.all(termExpr(term)) as Array<{ rowid: number }>;
       termRowids.set(term, new Set(rows.map((row) => Number(row.rowid))));
     }
 
@@ -1138,7 +1148,6 @@ export function searchMemories(
     }
     return collected;
   }
-
   if (normalizedQuery.length === 0) {
     return runLiteralLikeFallback();
   }

@@ -41,6 +41,7 @@ import type { DatabaseManager } from "../store/db.js";
 import type { AutoRetrieveTarget, MemoryConfig } from "../types.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  DEFAULT_BASH_RETRIEVE_KEYWORDS_ONLY,
   DEFAULT_BASH_RETRIEVE_MAX_CHARS,
   DEFAULT_BASH_RETRIEVE_MIN_MATCHED_TERMS,
   DEFAULT_BASH_RETRIEVE_MIN_TERMS,
@@ -192,6 +193,7 @@ export function setupBashRetrieve(
   const maxChars = Math.max(1, bashRetrieve.maxChars ?? DEFAULT_BASH_RETRIEVE_MAX_CHARS);
   const minTerms = Math.max(1, bashRetrieve.minTerms ?? DEFAULT_BASH_RETRIEVE_MIN_TERMS);
   const minMatchedTerms = Math.max(2, bashRetrieve.minMatchedTerms ?? DEFAULT_BASH_RETRIEVE_MIN_MATCHED_TERMS);
+  const keywordsOnly = bashRetrieve.keywordsOnly ?? DEFAULT_BASH_RETRIEVE_KEYWORDS_ONLY;
   const targets: readonly AutoRetrieveTarget[] =
     bashRetrieve.targets && bashRetrieve.targets.length > 0 ? bashRetrieve.targets : DEFAULT_TARGETS;
 
@@ -207,7 +209,7 @@ export function setupBashRetrieve(
     const seen = new Set<number>();
     for (const target of targets) {
       for (const entry of searchMemories(dbManager, query, {
-        target, projects, limit: topK, requireMatchedTerms: minMatchedTerms,
+        target, projects, limit: topK, requireMatchedTerms: minMatchedTerms, keywordsOnly,
       })) {
         if (seen.has(entry.id)) continue;
         seen.add(entry.id);

@@ -44,6 +44,12 @@ export interface AutoRetrieveConfig {
    * Default: 2
    */
   minMatchedTerms?: number;
+  /**
+   * Match ONLY against the curated keywords column (not full content).
+   * Default: true — much higher precision, but entries without keywords are
+   * not found.
+   */
+  keywordsOnly?: boolean;
 }
 
 /**
@@ -71,6 +77,12 @@ export interface BashRetrieveConfig {
    * Default: 2
    */
   minMatchedTerms?: number;
+  /**
+   * Match ONLY against the curated keywords column (not full content).
+   * Default: true — much higher precision, but entries without keywords are
+   * not found.
+   */
+  keywordsOnly?: boolean;
 }
 
 export interface MemoryConfig {

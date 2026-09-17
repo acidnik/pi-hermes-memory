@@ -149,10 +149,10 @@ describe("loadConfig", () => {
     assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).autoRetrieve, { enabled: true });
 
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ autoRetrieve: {
-      enabled: true, topK: 5, maxChars: 900, minQueryChars: 8, minMatchedTerms: 4, targets: ["memory", "failure"],
+      enabled: true, topK: 5, maxChars: 900, minQueryChars: 8, minMatchedTerms: 4, keywordsOnly: false, targets: ["memory", "failure"],
     } }));
     assert.deepStrictEqual(loadConfig(TEST_CONFIG_PATH).autoRetrieve, {
-      enabled: true, topK: 5, maxChars: 900, minQueryChars: 8, minMatchedTerms: 4, targets: ["memory", "failure"],
+      enabled: true, topK: 5, maxChars: 900, minQueryChars: 8, minMatchedTerms: 4, keywordsOnly: false, targets: ["memory", "failure"],
     });
 
     // Non-boolean/non-array values are ignored, empty config stays disabled.

@@ -176,6 +176,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         if (typeof raw.maxChars === "number") autoRetrieve.maxChars = raw.maxChars;
         if (typeof raw.minQueryChars === "number") autoRetrieve.minQueryChars = raw.minQueryChars;
         if (typeof raw.minMatchedTerms === "number") autoRetrieve.minMatchedTerms = raw.minMatchedTerms;
+        if (typeof raw.keywordsOnly === "boolean") autoRetrieve.keywordsOnly = raw.keywordsOnly;
         if (Array.isArray(raw.targets)
           && raw.targets.length > 0
           && raw.targets.every((t) => t === "memory" || t === "user" || t === "failure")) {
@@ -191,6 +192,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         if (typeof raw.maxChars === "number") bashRetrieve.maxChars = raw.maxChars;
         if (typeof raw.minTerms === "number") bashRetrieve.minTerms = raw.minTerms;
         if (typeof raw.minMatchedTerms === "number") bashRetrieve.minMatchedTerms = raw.minMatchedTerms;
+        if (typeof raw.keywordsOnly === "boolean") bashRetrieve.keywordsOnly = raw.keywordsOnly;
         if (Array.isArray(raw.targets)
           && raw.targets.length > 0
           && raw.targets.every((t) => t === "memory" || t === "user" || t === "failure")) {
