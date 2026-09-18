@@ -5,7 +5,7 @@
  * injection results are persisted in `retrieved_memories(session_id,
  * memory_id)` so the rule survives process restarts and session resumes. The
  * rows are cleared after context compaction (the model has effectively
- * forgotten the injected facts) and when the session actually quits.
+ * forgotten the injected facts). Session end (quit) does not clear the rows:
  */
 
 import { DatabaseManager } from './db.js';
@@ -49,7 +49,7 @@ export function markRetrievedMemoryIds(
   for (const id of memoryIds) insert.run(sessionId, id, stamp);
 }
 
-/** Forget all injections for a session (after compaction or on quit). */
+/** Forget all injections for a session (after context compaction). */
 export function resetSessionRetrievals(
   dbManager: DatabaseManager,
   sessionId: string,

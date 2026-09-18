@@ -245,17 +245,17 @@ describe("auto-retrieve", () => {
     assert.ok(await fireRetrieval(harness, QUERY), "re-injection allowed after compaction");
   });
 
-  it("quit clears dedup; reload keeps it", async () => {
+  it("does not clear dedup on session end (quit/resume keep it)", async () => {
     seedMemories();
     const harness = createHarness(baseConfig({ autoRetrieve: { enabled: true } }), { project: "project-a" });
     assert.ok(await fireRetrieval(harness, QUERY));
     assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 3);
 
-    await harness.handlers.session_shutdown[0]({ type: "session_shutdown", reason: "reload" }, harness.ctx);
-    assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 3, "reload keeps dedup");
-
-    await harness.handlers.session_shutdown[0]({ type: "session_shutdown", reason: "quit" }, harness.ctx);
-    assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 0, "quit clears dedup");
+    // No shutdown cleanup is registered at all: a resumed session reuses the
+    // same session id, so its dedup rows must survive pi restarts (otherwise
+    // every exit+resume re-floods the same facts).
+    assert.equal(harness.handlers.session_shutdown, undefined, "no session_shutdown cleanup handler");
+    assert.equal(getRetrievedMemoryIds(dbManager, "test-session").size, 3, "dedup survives session end");
   });
 
   it("skips short queries, slash commands and background prompts", async () => {
