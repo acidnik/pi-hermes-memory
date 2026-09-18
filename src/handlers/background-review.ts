@@ -15,6 +15,7 @@ import {
 } from "../constants.js";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
+import { getReviewProgress, setReviewProgress } from "../store/review-progress-store.js";
 import type { MemoryConfig } from "../types.js";
 import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
@@ -61,6 +62,12 @@ export interface BackgroundReviewOptions {
   dbManager?: DatabaseManager | null;
   projectName?: ProjectNameRef;
   deps?: BackgroundReviewDeps;
+}
+
+/** Session id when the session manager exposes one (null in tests/harness). */
+function sessionIdOf(ctx: { sessionManager?: { getSessionId?(): string } }): string | undefined {
+  const manager = ctx?.sessionManager;
+  return typeof manager?.getSessionId === "function" ? manager.getSessionId() : undefined;
 }
 
 export interface BackgroundReviewDeps {
@@ -318,6 +325,23 @@ export function setupBackgroundReview(
         return undefined;
       }
 
+      // Persisted delta pointer: a fresh process / resumed session has no
+      // in-memory pointer, so restore the last reviewed entry from SQLite
+      // before slicing. The full branch is delta-reviewed once per session
+      // lifetime, not once per process start. Best-effort — a missing or
+      // unreadable row falls back to the whole-branch behavior below.
+      if (config.reviewDeltaOnly !== false && !lastReviewedEntryId) {
+        const sessionId = sessionIdOf(ctx as { sessionManager?: { getSessionId?(): string } });
+        if (sessionId && dbManager) {
+          try {
+            const persisted = getReviewProgress(dbManager, sessionId);
+            if (persisted) lastReviewedEntryId = persisted;
+          } catch {
+            // Best-effort only; the slice below falls back to the whole branch.
+          }
+        }
+      }
+
       // Delta slice: everything after the last reviewed entry. The first run
       // (no pointer yet) reviews the whole branch; when the pointer is gone
       // (branch reshaped) fall back to the whole branch too.
@@ -443,7 +467,22 @@ export function setupBackgroundReview(
     activeReview = Promise.resolve()
       .then(() => runReview())
       .then((reviewedThrough) => {
-        if (typeof reviewedThrough === "string") lastReviewedEntryId = reviewedThrough;
+        if (typeof reviewedThrough !== "string") return;
+        lastReviewedEntryId = reviewedThrough;
+        // Write-through: keep the delta pointer across restarts/resumes. Only
+        // delta mode persists (reviewDeltaOnly:false always re-sends the whole
+        // branch, so a stored pointer would be wrong). Best-effort — the
+        // in-memory pointer still deltas the rest of this process.
+        if (config.reviewDeltaOnly !== false) {
+          const sessionId = sessionIdOf(ctx as { sessionManager?: { getSessionId?(): string } });
+          if (sessionId && dbManager) {
+            try {
+              setReviewProgress(dbManager, sessionId, reviewedThrough);
+            } catch {
+              // Best-effort only.
+            }
+          }
+        }
       })
       .catch(() => {
         // Best-effort only; transport failures are diagnosed after both paths settle.

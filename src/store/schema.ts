@@ -8,6 +8,8 @@
  * - message_fts — FTS5 index for full-text search across messages
  * - memories — extended memory entries (unlimited, searchable)
  * - memory_fts — FTS5 index for memory search
+ * - retrieved_memories — per-session dedup for auto-retrieved injection
+ * - review_progress — per-session auto-review delta pointer
  */
 
 export const SCHEMA_SQL = `
@@ -105,6 +107,18 @@ export const SCHEMA_SQL = `
     memory_id INTEGER NOT NULL,
     retrieved_at TEXT NOT NULL,
     PRIMARY KEY (session_id, memory_id)
+  );
+
+  -- Per-session auto-review delta pointer: the last session entry id already
+  -- handed to a background review, persisted so the full branch is delta-
+  -- reviewed once per session lifetime and a resumed process continues from
+  -- where the previous one stopped. Rows are kept on session_compact and
+  -- quit (like retrieved_memories): compaction touches prompt context, not
+  -- the review pointer, and a quit+resume must not re-review the whole branch.
+  CREATE TABLE IF NOT EXISTS review_progress (
+    session_id TEXT PRIMARY KEY,
+    last_entry_id TEXT,
+    updated_at TEXT NOT NULL
   );
 
   -- Triggers to keep memory_fts in sync with memories table
