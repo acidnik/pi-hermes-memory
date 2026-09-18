@@ -285,13 +285,7 @@ export function setupBashRetrieve(
     try { resetSessionRetrievals(dbManager, sessionId); } catch { /* best effort */ }
   });
 
-  pi.on("session_shutdown", (event, ctx) => {
-    const sessionId = sessionIdOf(ctx);
-    if (!sessionId || !dbManager) return;
-    // Real session end: drop its dedup rows. reload/new/resume/fork keep them
-    // so a resumed session continues the "once per session" guarantee.
-    if ((event as { reason?: string }).reason === "quit") {
-      try { resetSessionRetrievals(dbManager, sessionId); } catch { /* best effort */ }
-    }
-  });
+  // Quit does NOT clear dedup: same rationale as auto-retrieve — a resumed
+  // session reuses the session id, so the rows survive pi restarts, and only
+  // compaction resets them.
 }

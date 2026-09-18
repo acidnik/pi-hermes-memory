@@ -21,7 +21,9 @@
  *   `retrieved_memories`, indexed by session id, surviving restarts/resumes).
  * - After context compaction the model has effectively forgotten the injected
  *   facts, so `session_compact` clears the session's dedup and injection can
- *   run once more. On a real session quit the rows are dropped too.
+ *   run once more. Session end (quit) does NOT drop the rows — a resumed
+ *   session reuses the same session id, so the once-per-session guarantee
+ *   survives pi restarts.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -342,13 +344,8 @@ export function setupAutoRetrieve(
     try { resetSessionRetrievals(dbManager, sessionId); } catch { /* best effort */ }
   });
 
-  pi.on("session_shutdown", (event, ctx) => {
-    const sessionId = sessionIdOf(ctx as { sessionManager?: { getSessionId?(): string } });
-    if (!sessionId || !dbManager) return;
-    // Real session end: drop its dedup rows. reload/new/resume/fork keep them
-    // so a resumed session continues the "once per session" guarantee.
-    if ((event as { reason?: string }).reason === "quit") {
-      try { resetSessionRetrievals(dbManager, sessionId); } catch { /* best effort */ }
-    }
-  });
+  // Quit does NOT clear dedup: a resumed session keeps the same session id,
+  // so "at most once per session" must survive pi restarts too — otherwise
+  // every exit+resume re-floods the same facts. Only compaction resets it
+  // (the model has genuinely lost the context then).
 }
