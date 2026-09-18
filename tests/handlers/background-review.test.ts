@@ -1,6 +1,8 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
+import * as fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   buildDirectReviewUserPrompt,
@@ -12,6 +14,7 @@ import {
 } from "../../src/handlers/background-review.js";
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import type { DirectReviewResult } from "../../src/handlers/review-memory-ops.js";
+import { DatabaseManager } from "../../src/store/db.js";
 import type { MemoryConfig } from "../../src/types.js";
 
 // ─── Mock infrastructure ───
@@ -45,8 +48,10 @@ function setup(
   pi: ExtensionAPI,
   config: MemoryConfig = defaultConfig as MemoryConfig,
   extraDeps: BackgroundReviewDeps = {},
+  dbManager?: DatabaseManager | null,
 ): void {
   setupBackgroundReview(pi, mockStore, null, config, {
+    dbManager: dbManager ?? null,
     deps: { onReviewSettled: () => reviewSettledSignal.resolve(), ...extraDeps },
   });
 }
@@ -56,7 +61,7 @@ function captureExecArgs(args: any[]): any[] {
   const capturedArgs = [...childArgs];
   const promptReference = capturedArgs.at(-1);
   if (typeof promptReference === "string" && promptReference.startsWith("@")) {
-    capturedArgs[capturedArgs.length - 1] = readFileSync(promptReference.slice(1), "utf-8");
+    capturedArgs[capturedArgs.length - 1] = fs.readFileSync(promptReference.slice(1), "utf-8");
   }
   return [command, capturedArgs, options];
 }
@@ -119,6 +124,14 @@ function makeCtx(branch: any[] = [], overrides: Record<string, any> = {}) {
     },
     ...overrides,
   };
+}
+
+/** makeCtx with a session id, so the persisted delta pointer can be read/written. */
+function sessionCtx(branch: any[], sessionId: string, overrides: Record<string, any> = {}) {
+  return makeCtx(branch, {
+    sessionManager: { getBranch: () => branch, getSessionId: () => sessionId },
+    ...overrides,
+  });
 }
 
 const defaultConfig = {
@@ -1245,5 +1258,149 @@ describe("setupBackgroundReview", () => {
     assert.ok(prompt.includes("Fragment a message 0"), "full-session mode keeps the old portion");
     assert.ok(prompt.includes("Fragment b message 6"));
     assert.ok(!prompt.includes("new portion since the last auto-review"), "not marked as a fragment");
+  });
+
+  // ─── Persisted delta pointer across restarts/resumes (reviewProgress) ───
+
+  function tableRow(sessionId: string): { last_entry_id: string | null } | undefined {
+    return dbManagerRef.getDb().prepare(
+      "SELECT last_entry_id FROM review_progress WHERE session_id = ?",
+    ).get(sessionId) as { last_entry_id: string | null } | undefined;
+  }
+
+  let dbManagerRef: DatabaseManager;
+  let tmpDir: string;
+  let sessionId: string;
+
+  function processDbHarness(pi: ExtensionAPI, dbManager: DatabaseManager) {
+    handlers = {};
+    execCalls = [];
+    resetReviewSettledSignal();
+    setup(pi, defaultConfig, {}, dbManager);
+  }
+
+  it("restores the persisted delta pointer on a fresh process (quit+resume continue, not re-review)", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "review-progress-1-"));
+    dbManagerRef = new DatabaseManager(tmpDir);
+    sessionId = "resume-session";
+    try {
+      // First process: whole-branch review persists a-5 as the pointer.
+      processDbHarness(createMockPi(), dbManagerRef);
+      fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+      const first = makeBranchWithIds("a", 6, 0);
+      for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(first, sessionCtx(first, sessionId));
+      await reviewSettledSignal.promise;
+      assert.strictEqual(execCalls.length, 1);
+      assert.strictEqual(tableRow(sessionId)?.last_entry_id, "a-5", "successful review persists the pointer");
+
+      // Second process: a fresh harness (fresh in-memory pointer) over the
+      // same SQLite DB and session id must continue from a-5, not re-review.
+      processDbHarness(createMockPi(), dbManagerRef);
+      fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+      const resumed = [...first, ...makeBranchWithIds("b", 4, 6)];
+      for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(resumed, sessionCtx(resumed, sessionId));
+      await reviewSettledSignal.promise;
+
+      assert.strictEqual(execCalls.length, 1);
+      const prompt = reviewPrompt(0);
+      assert.ok(prompt.includes("Fragment b message 6"), "resume reviews only the unseen portion");
+      assert.ok(!prompt.includes("Fragment a message 0"), "already-reviewed portion is not resent after resume");
+      assert.ok(prompt.includes("new portion since the last auto-review"), "the prompt marks the fragment");
+    } finally {
+      dbManagerRef.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists nothing when every transport fails, so a fresh process re-reviews the whole branch", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "review-progress-2-"));
+    dbManagerRef = new DatabaseManager(tmpDir);
+    sessionId = "fail-session";
+    try {
+      processDbHarness(createMockPi({ code: 1, stdout: "", stderr: "boom" }), dbManagerRef);
+      fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+      const first = makeBranchWithIds("a", 6, 0);
+      for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(first, sessionCtx(first, sessionId));
+      await reviewSettledSignal.promise;
+      assert.strictEqual(execCalls.length, 1);
+      assert.strictEqual(tableRow(sessionId), undefined, "failed review must not persist the pointer");
+
+      // Fresh process, same DB + session: the whole branch is still unseen.
+      processDbHarness(createMockPi(), dbManagerRef);
+      fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+      for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(first, sessionCtx(first, sessionId));
+      await reviewSettledSignal.promise;
+      assert.strictEqual(execCalls.length, 1);
+      assert.ok(reviewPrompt(0).includes("Fragment a message 0"), "failed review leaves the whole branch unseen");
+      assert.ok(!reviewPrompt(0).includes("new portion since the last auto-review"), "not a fragment without a pointer");
+    } finally {
+      dbManagerRef.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reviewDeltaOnly:false ignores the persisted pointer (whole branch every time, no writes)", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "review-progress-3-"));
+    dbManagerRef = new DatabaseManager(tmpDir);
+    sessionId = "full-session";
+    try {
+      // Seed an unrelated pointer row that delta mode would honor.
+      dbManagerRef.getDb().prepare(
+        "INSERT INTO review_progress (session_id, last_entry_id, updated_at) VALUES (?, ?, ?)",
+      ).run(sessionId, "SEED-POINTER", new Date().toISOString());
+
+      handlers = {};
+      execCalls = [];
+      resetReviewSettledSignal();
+      setup(createMockPi(), { ...defaultConfig, reviewDeltaOnly: false } as MemoryConfig, {}, dbManagerRef);
+      fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+
+      const first = makeBranchWithIds("a", 6, 0);
+      for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(first, sessionCtx(first, sessionId));
+      await reviewSettledSignal.promise;
+      assert.strictEqual(execCalls.length, 1);
+      assert.ok(reviewPrompt(0).includes("Fragment a message 0"), "full-session mode is unaffected by the persisted pointer");
+
+      const second = [...first, ...makeBranchWithIds("b", 4, 6)];
+      resetReviewSettledSignal();
+      for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(second, sessionCtx(second, sessionId));
+      await reviewSettledSignal.promise;
+      assert.strictEqual(execCalls.length, 2);
+      const prompt = reviewPrompt(1);
+      assert.ok(prompt.includes("Fragment a message 0"), "full-session mode keeps re-sending the whole branch");
+      assert.ok(prompt.includes("Fragment b message 6"));
+      assert.ok(!prompt.includes("new portion since the last auto-review"), "not marked as a fragment");
+
+      assert.strictEqual(
+        tableRow(sessionId)?.last_entry_id,
+        "SEED-POINTER",
+        "full-session mode never reads or writes the persisted pointer",
+      );
+    } finally {
+      dbManagerRef.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reviews the whole branch once when no persisted pointer exists (first run in a session)", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "review-progress-4-"));
+    dbManagerRef = new DatabaseManager(tmpDir);
+    sessionId = "first-run-session";
+    try {
+      processDbHarness(createMockPi(), dbManagerRef);
+      fireMessageEnd("user"); fireMessageEnd("user"); fireMessageEnd("user");
+      const first = makeBranchWithIds("a", 6, 0);
+      for (let i = 0; i < defaultConfig.nudgeInterval; i++) fireTurnEnd(first, sessionCtx(first, sessionId));
+      await reviewSettledSignal.promise;
+
+      assert.strictEqual(execCalls.length, 1);
+      const prompt = reviewPrompt(0);
+      assert.ok(prompt.includes("Fragment a message 0"), "no pointer: whole branch reviewed once");
+      assert.ok(!prompt.includes("new portion since the last auto-review"), "first review is not a fragment");
+      assert.strictEqual(tableRow(sessionId)?.last_entry_id, "a-5", "pointer persisted after the first review");
+    } finally {
+      dbManagerRef.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
