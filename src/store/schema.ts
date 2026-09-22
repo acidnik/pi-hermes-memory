@@ -83,6 +83,7 @@ export const SCHEMA_SQL = `
     failure_reason TEXT,
     tool_state TEXT,
     corrected_to TEXT,
+    source_session TEXT,
     created DATE NOT NULL,
     last_referenced DATE NOT NULL
   );

@@ -740,6 +740,11 @@ export class MemoryStore {
     const projectMetadata = project?.trim()
       ? `, project64=${Buffer.from(project.trim(), "utf-8").toString("base64url")}`
       : "";
+    // Fresh-write provenance: the session producing this encode stamps its id
+    // (src=) so retrieval can exclude the current session's own facts. Rows
+    // written by other sessions/legacy entries stay without src.
+    const sessionId = this.sessionIdProvider?.();
+    const srcMetadata = sessionId ? `, src=${sessionId}` : "";
     // keywords round-trip through the metadata regex, which splits keys= on
     // ", " and stops at the closing "-->" (no ">" allowed); a comma inside a
     // keyword would split it apart, so both are excluded from stored keys.
@@ -748,15 +753,15 @@ export class MemoryStore {
     const keysMetadata = cleanedKeywords.length > 0
       ? `, keys=${cleanedKeywords.join(", ")}`
       : "";
-    return `${text} <!-- created=${created}, last=${lastReferenced}${keysMetadata}${projectMetadata} -->`;
+    return `${text} <!-- created=${created}, last=${lastReferenced}${keysMetadata}${projectMetadata}${srcMetadata} -->`;
   }
 
   /**
    * Decode entry text, extracting metadata if present.
    * Falls back to today's date for legacy entries without metadata.
    */
-  private decodeEntry(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null } {
-    const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/s);
+  private decodeEntry(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null; sourceSession: string | null } {
+    const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*project64=([A-Za-z0-9_-]+))?(?:,\s*src=([A-Za-z0-9_-]+))?\s*-->\s*$/s);
     if (match) {
       let project: string | null = null;
       if (match[5]) {
@@ -771,11 +776,12 @@ export class MemoryStore {
         lastReferenced: match[3].trim(),
         project,
         keywords: keywords && keywords.length > 0 ? keywords : null,
+        sourceSession: match[6] ?? null,
       };
     }
     // Legacy entry without metadata — use today as default
     const today = new Date().toISOString().split("T")[0];
-    return { text: raw.trim(), created: today, lastReferenced: today, project: null, keywords: null };
+    return { text: raw.trim(), created: today, lastReferenced: today, project: null, keywords: null, sourceSession: null };
   }
 
   /** Strip metadata comment from entry text for display. */

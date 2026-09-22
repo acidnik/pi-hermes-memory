@@ -259,7 +259,11 @@ export function setupBashRetrieve(
       const alreadyInjected = getRetrievedMemoryIds(dbManager, sessionId);
 
       const fresh = searchTargets(terms.join(" "), projects)
-        .filter((entry) => !alreadyInjected.has(entry.id));
+        .filter((entry) => !alreadyInjected.has(entry.id))
+        // Skip this session's own facts: entries extracted/written by the
+        // current session carry its id in source_session and must not be
+        // fed back into it (the id-churn-safe provenance filter).
+        .filter((entry) => entry.sourceSession !== sessionId);
       const picked = pickWithinBudget(fresh);
       if (picked.length === 0) return;
 

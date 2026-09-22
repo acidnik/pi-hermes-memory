@@ -25,7 +25,8 @@ const MEMORY_SELECT_COLUMNS = `
   tool_state,
   corrected_to,
   created,
-  last_referenced
+  last_referenced,
+  source_session
 `;
 
 // The BM25-ranked search joins memory_fts, which also has a `content` column,
@@ -60,6 +61,8 @@ export interface SqliteMemoryEntry {
   correctedTo: string | null;
   created: string;
   lastReferenced: string;
+  /** Session id that first wrote this entry (provenance for retrieval exclusion). */
+  sourceSession: string | null;
   /** Query terms that matched this entry (filled only by gated searches). */
   matchedTerms?: string[];
 }
@@ -75,6 +78,7 @@ export interface SqliteMemorySyncInput {
   correctedTo?: string | null;
   created?: string | null;
   lastReferenced?: string | null;
+  sourceSession?: string | null;
 }
 
 export interface SqliteMemorySyncResult {
@@ -160,6 +164,7 @@ function mapRow(row: {
   corrected_to: string | null;
   created: string;
   last_referenced: string;
+  source_session: string | null;
 }): SqliteMemoryEntry {
   return {
     id: row.id,
@@ -173,6 +178,7 @@ function mapRow(row: {
     correctedTo: row.corrected_to,
     created: row.created,
     lastReferenced: row.last_referenced,
+    sourceSession: row.source_session,
   };
 }
 
@@ -238,6 +244,7 @@ function getMemoryById(dbManager: DatabaseManager, id: number): SqliteMemoryEntr
     corrected_to: string | null;
     created: string;
     last_referenced: string;
+    source_session: string | null;
   } | undefined;
 
   return row ? mapRow(row) : null;
@@ -271,10 +278,13 @@ export function formatMarkdownMemoryEntry(entry: SqliteMemoryEntry): string {
   const projectMetadata = entry.project?.trim()
     ? `, project64=${Buffer.from(entry.project.trim(), "utf-8").toString("base64url")}`
     : "";
+  const srcMetadata = entry.sourceSession?.trim()
+    ? `, src=${entry.sourceSession.trim()}`
+    : "";
   const keysMetadata = entry.keywords && entry.keywords.length > 0
     ? `, keys=${entry.keywords.join(", ")}`
     : "";
-  return `${entry.content} <!-- created=${entry.created}, last=${entry.lastReferenced}${keysMetadata}${projectMetadata} -->`;
+  return `${entry.content} <!-- created=${entry.created}, last=${entry.lastReferenced}${keysMetadata}${projectMetadata}${srcMetadata} -->`;
 }
 
 /**
@@ -315,11 +325,12 @@ export function loadMemoryScopeEntries(
     corrected_to: string | null;
     created: string;
     last_referenced: string;
+    source_session: string | null;
   }>;
   return rows.map((row) => formatMarkdownMemoryEntry(mapRow(row)));
 }
-function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null } {
-  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/);
+function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null; sourceSession: string | null } {
+  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*project64=([A-Za-z0-9_-]+))?(?:,\s*src=([A-Za-z0-9_-]+))?\s*-->\s*$/);
   if (match) {
     let project: string | null = null;
     if (match[5]) {
@@ -334,6 +345,7 @@ function parseMetadataComment(raw: string): { text: string; created: string; las
       lastReferenced: match[3].trim(),
       project,
       keywords: keywords && keywords.length > 0 ? keywords : null,
+      sourceSession: match[6] ?? null,
     };
   }
 
@@ -344,6 +356,7 @@ function parseMetadataComment(raw: string): { text: string; created: string; las
     lastReferenced: fallback,
     project: null,
     keywords: null,
+    sourceSession: null,
   };
 }
 
@@ -402,13 +415,14 @@ export function addMemory(
   created = today(),
   lastReferenced = created,
   keywords: string[] | null = null,
+  sourceSession: string | null = null,
 ): SqliteMemoryEntry {
   const db = dbManager.getDb();
 
   const result = db.prepare(`
-    INSERT INTO memories (project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(project, target, category, content, serializeKeywords(keywords), failureReason, toolState, correctedTo, created, lastReferenced);
+    INSERT INTO memories (project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced, source_session)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(project, target, category, content, serializeKeywords(keywords), failureReason, toolState, correctedTo, created, lastReferenced, sourceSession);
 
   return {
     id: Number(result.lastInsertRowid),
@@ -422,6 +436,7 @@ export function addMemory(
     correctedTo,
     created,
     lastReferenced,
+    sourceSession,
   };
 }
 
@@ -468,6 +483,7 @@ export function parseMarkdownMemoryEntry(
       keywords,
       created,
       lastReferenced,
+      sourceSession: metadata.sourceSession,
     };
   }
 
@@ -507,6 +523,7 @@ export function parseMarkdownMemoryEntry(
     correctedTo,
     created,
     lastReferenced,
+    sourceSession: metadata.sourceSession,
   };
 }
 
@@ -554,6 +571,7 @@ export function syncMemoryEntry(
     corrected_to: string | null;
     created: string;
     last_referenced: string;
+    source_session: string | null;
   } | undefined;
 
   if (!existing) {
@@ -571,6 +589,7 @@ export function syncMemoryEntry(
         created,
         lastReferenced,
         keywords,
+        input.sourceSession ?? null,
       ),
     };
   }
@@ -584,10 +603,13 @@ export function syncMemoryEntry(
   const updatedFailureReason = existing.failure_reason ?? failureReason;
   const updatedToolState = existing.tool_state ?? toolState;
   const updatedCorrectedTo = existing.corrected_to ?? correctedTo;
+  // Provenance is write-once: a re-sync of the same content never overrides
+  // the session that first produced the row.
+  const updatedSourceSession = existing.source_session ?? input.sourceSession ?? null;
 
   db.prepare(`
     UPDATE memories
-    SET category = ?, keywords = ?, failure_reason = ?, tool_state = ?, corrected_to = ?, created = ?, last_referenced = ?
+    SET category = ?, keywords = ?, failure_reason = ?, tool_state = ?, corrected_to = ?, created = ?, last_referenced = ?, source_session = ?
     WHERE id = ?
   `).run(
     updatedCategory,
@@ -597,6 +619,7 @@ export function syncMemoryEntry(
     updatedCorrectedTo,
     updatedCreated,
     updatedLastReferenced,
+    updatedSourceSession,
     existing.id,
   );
 
@@ -788,6 +811,7 @@ export function replaceSyncedMemories(
     corrected_to: string | null;
     created: string;
     last_referenced: string;
+    source_session: string | null;
   }>;
 
   if (rows.length === 0) {
@@ -1009,6 +1033,7 @@ export function searchMemories(
         corrected_to: string | null;
         created: string;
         last_referenced: string;
+        source_session: string | null;
         rank_score: number;
       }>;
 
@@ -1056,6 +1081,7 @@ export function searchMemories(
       corrected_to: string | null;
       created: string;
       last_referenced: string;
+      source_session: string | null;
     }>;
     return rows.map(mapRow);
   };
@@ -1104,6 +1130,7 @@ export function searchMemories(
       corrected_to: string | null;
       created: string;
       last_referenced: string;
+      source_session: string | null;
     }>;
     return rows.map(mapRow);
   };
@@ -1240,6 +1267,7 @@ export function getMemories(
     corrected_to: string | null;
     created: string;
     last_referenced: string;
+    source_session: string | null;
   }>;
 
   return rows.map(mapRow);
@@ -1297,6 +1325,7 @@ export function getRecentFailures(
     corrected_to: string | null;
     created: string;
     last_referenced: string;
+    source_session: string | null;
   }>;
 
   return rows.map(mapRow);

@@ -950,6 +950,9 @@ export class DatabaseManager {
     if (!names.has('keywords')) {
       db.exec('ALTER TABLE memories ADD COLUMN keywords TEXT');
     }
+    if (!names.has('source_session')) {
+      db.exec('ALTER TABLE memories ADD COLUMN source_session TEXT');
+    }
   }
 
   private ensureSessionsColumns(db: DatabaseLike): void {
@@ -1018,14 +1021,15 @@ export class DatabaseManager {
             failure_reason TEXT,
             tool_state TEXT,
             corrected_to TEXT,
+            source_session TEXT,
             created DATE NOT NULL,
             last_referenced DATE NOT NULL
           );
         `);
 
         db.exec(`
-          INSERT INTO memories_new (id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced)
-          SELECT id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced
+          INSERT INTO memories_new (id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, source_session, created, last_referenced)
+          SELECT id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, source_session, created, last_referenced
           FROM memories;
         `);
 
@@ -1053,14 +1057,15 @@ export class DatabaseManager {
           failure_reason TEXT,
           tool_state TEXT,
           corrected_to TEXT,
+          source_session TEXT,
           created DATE NOT NULL,
           last_referenced DATE NOT NULL
         );
       `);
 
       db.exec(`
-          INSERT INTO memories_new (id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced)
-          SELECT id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced
+          INSERT INTO memories_new (id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, source_session, created, last_referenced)
+          SELECT id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, source_session, created, last_referenced
           FROM memories;
         `);
 
