@@ -12,6 +12,7 @@ process.env.PI_CODING_AGENT_DIR = root;
 const { default: registerExtension } = await import("../src/index.js");
 const { MemoryStore } = await import("../src/store/memory-store.js");
 const { DatabaseManager } = await import("../src/store/db.js");
+const { syncMemoryEntry } = await import("../src/store/sqlite-memory-store.js");
 const globalDir = path.join(root, "pi-hermes-memory");
 const cwd = path.join(root, "workspace");
 const projectDir = path.join(root, "projects-memory", "workspace");
@@ -28,6 +29,26 @@ async function configure(overrides: Record<string, unknown> = {}) {
     flushOnCompact: false, flushOnShutdown: false,
     ...overrides,
   }));
+}
+
+const DURABLE_SEED = [
+  { content: "durable global fact", project: null },
+  { content: "durable project fact", project: "workspace" },
+];
+
+/**
+ * Seed the SQLite store directly: it is the only memory source. The Markdown
+ * files in `beforeEach` are deliberately stale and must stay ignored.
+ */
+async function seedMemory(dir = globalDir, rows = DURABLE_SEED): Promise<void> {
+  const db = new DatabaseManager(dir);
+  try {
+    for (const row of rows) {
+      syncMemoryEntry(db, { content: row.content, target: "memory", project: row.project });
+    }
+  } finally {
+    db.close();
+  }
 }
 
 function register() {
@@ -65,8 +86,9 @@ beforeEach(async () => {
   await fs.mkdir(globalDir, { recursive: true });
   await fs.mkdir(projectDir, { recursive: true });
   await fs.mkdir(cwd, { recursive: true });
-  await fs.writeFile(path.join(globalDir, "MEMORY.md"), "durable global fact");
-  await fs.writeFile(path.join(projectDir, "MEMORY.md"), "durable project fact");
+  // Legacy Markdown snapshots: never read, never rewritten.
+  await fs.writeFile(path.join(globalDir, "MEMORY.md"), "STALE global fact from Markdown");
+  await fs.writeFile(path.join(projectDir, "MEMORY.md"), "STALE project fact from Markdown");
   await fs.writeFile(path.join(globalDir, "STANDING.md"), "- Always ask before deployment.\n");
   await configure();
   handlers = {}; tools = {}; commands = {}; notifications = [];
@@ -113,6 +135,7 @@ describe("lazy startup lifecycle", () => {
 
   it("loads and synchronizes once for concurrent first search and write", async (t) => {
     const loads = t.mock.method(MemoryStore.prototype, "loadFromDisk");
+    await seedMemory();
     register();
     await emit("session_start");
     const results = await Promise.all([
@@ -124,10 +147,12 @@ describe("lazy startup lifecycle", () => {
     assert.equal(loads.mock.callCount(), 2, "one global and one project load");
     assert.equal((await search()).details.count, 3);
     assert.equal(loads.mock.callCount(), 2);
-    assert.match(await fs.readFile(path.join(projectDir, "MEMORY.md"), "utf8"), /durable project fact/);
+    // The legacy Markdown snapshot stays untouched (never read, never rewritten).
+    assert.equal(await fs.readFile(path.join(projectDir, "MEMORY.md"), "utf8"), "STALE project fact from Markdown");
   });
 
   it("initializes from a command without a prior model turn", async () => {
+    await seedMemory();
     register();
     await emit("session_start");
     await commands["memory-insights"].handler("", ctx);
@@ -169,11 +194,12 @@ describe("lazy startup lifecycle", () => {
   it("supports a custom memory directory without waiting for a nonexistent migration", async () => {
     const custom = path.join(root, "custom", "store");
     await fs.mkdir(custom, { recursive: true });
-    await fs.writeFile(path.join(custom, "MEMORY.md"), "custom durable fact");
+    await fs.writeFile(path.join(custom, "MEMORY.md"), "STALE custom fact from Markdown");
     await configure({ memoryDir: custom });
     register();
     await emit("session_start");
     assert.equal(existsSync(path.join(custom, "sessions.db")), false);
+    await seedMemory(custom, [{ content: "custom durable fact", project: null }]);
     assert.equal((await search("custom")).details.count, 1);
     assert.equal(existsSync(path.join(custom, "sessions.db")), true);
   });
@@ -185,6 +211,7 @@ describe("lazy startup lifecycle", () => {
       if (fail) { fail = false; throw new Error("transient read failure"); }
       return original.call(this);
     });
+    await seedMemory();
     register();
     await emit("session_start");
     await assert.rejects(search(), /transient read failure/);
@@ -198,6 +225,7 @@ describe("lazy startup lifecycle", () => {
       if (++loads === 2) throw new Error("project load failed");
       return original.call(this);
     });
+    await seedMemory();
     register();
     await emit("session_start");
     await assert.rejects(search(), /project load failed/);
@@ -265,33 +293,45 @@ describe("lazy startup lifecycle", () => {
     assert.equal(stats.messages, 1000);
   });
 
-  for (const overrides of [{ lazyInitialization: false }, { memoryMode: "legacy-inject" }]) {
-    it(`preserves eager loading with ${JSON.stringify(overrides)}`, async (t) => {
-      await configure(overrides);
-      const loads = t.mock.method(MemoryStore.prototype, "loadFromDisk");
-      register();
-      await emit("session_start");
-      assert.equal(loads.mock.callCount(), 2);
-      assert.equal(existsSync(path.join(globalDir, "sessions.db")), true);
-      if (overrides.memoryMode === "legacy-inject") {
-        const before = await emit("before_agent_start", { systemPrompt: "base" });
-        assert.match(before.systemPrompt, /durable global fact/);
-        await tools.memory_add.execute("id", { target: "memory", content: "late addition" }, undefined, undefined, ctx);
-        const after = await emit("before_agent_start", { systemPrompt: "base" });
-        assert.equal(after.systemPrompt, before.systemPrompt);
-      }
-    });
-  }
+  it("preserves eager loading with a non-lazy config", async (t) => {
+    await configure({ lazyInitialization: false });
+    const loads = t.mock.method(MemoryStore.prototype, "loadFromDisk");
+    register();
+    await emit("session_start");
+    assert.equal(loads.mock.callCount(), 2);
+    assert.equal(existsSync(path.join(globalDir, "sessions.db")), true);
+  });
 
-  it("migrates legacy memory on first use, not startup", async () => {
+  it("ignores the retired memoryMode key: stays lazy and never injects Markdown", async (t) => {
+    await configure({ memoryMode: "legacy-inject" });
+    const loads = t.mock.method(MemoryStore.prototype, "loadFromDisk");
+    register();
+    await emit("session_start");
+    assert.equal(loads.mock.callCount(), 0);
+    assert.equal(existsSync(path.join(globalDir, "sessions.db")), false);
+    const prompt = await emit("before_agent_start", { systemPrompt: "base" });
+    assert.match(prompt.systemPrompt, /memory-policy/);
+    // Markdown memory is not injected any more, in any mode.
+    assert.doesNotMatch(prompt.systemPrompt, /STALE global fact from Markdown/);
+  });
+
+  it("never imports legacy Markdown memory, on startup or first use", async () => {
     const legacy = path.join(root, "memory");
     await fs.mkdir(legacy);
     await fs.writeFile(path.join(legacy, "USER.md"), "legacy durable preference");
     register();
     await emit("session_start");
-    assert.equal(existsSync(path.join(globalDir, "USER.md")), false);
-    assert.equal((await search("legacy")).details.count, 1);
-    assert.match(await fs.readFile(path.join(globalDir, "USER.md"), "utf8"), /legacy durable preference/);
+    const legacySearch = await search("legacy");
+    assert.equal(legacySearch.details.count ?? 0, 0, "legacy Markdown entry was imported");
+    assert.doesNotMatch(legacySearch.content[0].text, /legacy durable preference/);
+    const added = await tools.memory_add.execute("id", { target: "user", content: "fresh sqlite preference" }, undefined, undefined, ctx);
+    assert.equal(added.details.success, true);
+    assert.equal((await search("fresh")).details.count, 1);
+    // The add must not mirror into Markdown. (The legacy file itself may have
+    // been relocated here by the one-time extension-root migration.)
+    const userFile = path.join(globalDir, "USER.md");
+    const mirrored = existsSync(userFile) ? await fs.readFile(userFile, "utf8") : "";
+    assert.doesNotMatch(mirrored, /fresh sqlite preference/, "add mirrored Markdown");
   });
 
   it("keeps legacy pins and skill discovery available even when memory initialization fails", async (t) => {

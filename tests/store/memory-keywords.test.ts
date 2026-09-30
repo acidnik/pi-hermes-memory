@@ -241,9 +241,10 @@ describe("keywords — MemoryStore and memory tool integration", () => {
     } as unknown as Parameters<typeof import("../../src/tools/memory-tool.js").registerMemoryTool>[0];
 
     const store = new MemoryStore(policyOnlyConfig(tmpDir) as any);
-    await store.loadFromDisk();
     const { registerMemoryTool } = await import("../../src/tools/memory-tool.js");
+    // Wire the SQLite write path before loading: SQLite is the only source.
     registerMemoryTool(mockPi, store, null, dbManager);
+    await store.loadFromDisk();
 
     const result = await capturedResult.execute(
       "tc-1",

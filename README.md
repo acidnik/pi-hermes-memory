@@ -30,12 +30,23 @@ pi install npm:pi-hermes-memory
 # Index your past sessions (one-time)
 /memory-index-sessions
 
-# Backfill older Markdown memories into SQLite search (optional)
-/memory-sync-markdown
-
 # Learn how to use it
 /learn-memory-tool
 ```
+
+## Migration: SQLite-only memory
+
+Memory no longer uses Markdown files at all. `MEMORY.md`, `USER.md`, `failures.md` and
+`projects-memory/<project>/MEMORY.md` are no longer read or written — the `memories` table in
+`sessions.db` is the only store, with no size limit.
+
+What this changes for you:
+
+- Nothing to do. Existing files stay on disk as inert backups; delete them whenever you like.
+- Entries that live **only** in those files (saved before SQLite was authoritative) will no longer
+  appear in `memory_search`. `memory_search` now reads SQLite exclusively.
+- Memory was previously reset to the Markdown snapshot on every startup, which silently deleted
+  anything written since that snapshot. That is gone: SQLite rows are durable now.
 
 ## Upgrade Notes (v0.7.10)
 
@@ -55,13 +66,13 @@ No manual action is needed. Launch Pi once after upgrade to let migration/normal
 | Feature | What happens |
 |---|---|
 | 🔍 **Session Search** | Search across all past conversations via SQLite FTS5 |
-| 🧠 **Persistent Memory** | Facts, preferences, lessons saved to markdown files |
-| 🔄 **Memory Search Sync** | Successful Markdown memory writes are mirrored into SQLite for `memory_search` |
+| 🧠 **Persistent Memory** | Facts, preferences, lessons saved to SQLite — FTS5-searchable, no size limit |
+| 🗄️ **SQLite-only Storage** | One `memories` table in `sessions.db`; no Markdown files, no character budget |
 | ⚠️ **Failure Memory** | Learn from failures — stores what didn't work and why |
 | 📚 **Procedural Skills** | The agent saves *how* it solved problems as reusable docs |
 | ⚡ **Background Learning** | Every 10 turns (or 15 tool calls) the agent reviews and saves |
 | 🔧 **Correction Detection** | When you correct the agent, it saves immediately |
-| 🔄 **Auto-Consolidation** | When legacy-inject memory hits capacity, auto-merges instead of erroring |
+| 🔄 **Memory Consolidation** | `/memory-consolidate` merges/deduplicates entries on demand (no size limits to hit) |
 | 🛡️ **Secret Scanning** | API keys, tokens, SSH keys blocked from persistence |
 | 📊 **Memory Aging** | Entries carry timestamps — consolidation knows what's stale |
 | 🏗️ **Two-Tier Memory** | Global + per-project memory, both searchable |
@@ -80,8 +91,8 @@ The extension manages three types of knowledge:
 
 | Type | What | Storage | Token cost |
 |---|---|---|---|
-| **Memory** (MEMORY.md) | Facts — env details, project conventions, tool quirks | 5,000 chars max | Searchable by default |
-| **User Profile** (USER.md) | Who you are — name, preferences, communication style | 5,000 chars max | Searchable by default |
+| **Memory** | Facts — env details, project conventions, tool quirks | SQLite — no size limit | Searchable by default |
+| **User Profile** | Who you are — name, preferences, communication style | SQLite — no size limit | Searchable by default |
 | **Skills** (Pi-native `SKILL.md`) | Procedures — *how* to do something, reusable across sessions | Unlimited | Discoverable by Pi + manageable via the `skill_manage` tool |
 
 ![Memory + Skills Architecture](docs/images/memory-architecture.svg)
@@ -171,10 +182,10 @@ The extension stores memory at two levels:
 
 | Tier | Location | What goes here | Available when |
 |---|---|---|---|
-| **Global** | `~/.pi/agent/pi-hermes-memory/` | Facts that apply everywhere — your name, preferences, OS, tools | Searchable via `memory_search` |
-| **Project** | `~/.pi/agent/projects-memory/<project>/` | Facts scoped to one codebase — architecture decisions, API quirks, team norms | Searchable when cwd matches the project |
+| **Global** | `sessions.db`, `project IS NULL` | Facts that apply everywhere — your name, preferences, OS, tools | Searchable via `memory_search` |
+| **Project** | `sessions.db`, project-scoped rows | Facts scoped to one codebase — architecture decisions, API quirks, team norms | Searchable when cwd matches the project |
 
-By default, full Markdown memories are **not** injected into the system prompt. The system prompt gets a full-detail `<memory-policy>` that tells the agent when to call `memory_search` and how to treat memory results. This keeps first-turn token usage low while preserving access to user, project, failure, correction, insight, preference, convention, and tool-quirk memories.
+Memory lives **only** in SQLite (FTS5-searchable) and is **not** injected into the system prompt. The system prompt gets a full-detail `<memory-policy>` that tells the agent when to call `memory_search` and how to treat memory results. This keeps first-turn token usage low while preserving access to user, project, failure, correction, insight, preference, convention, and tool-quirk memories.
 
 Saved facts can carry **keywords** — synonyms, equivalents in other languages (e.g. RU↔EN), and inflections (index → indices, индексация) — extracted automatically by review/flush/correction or passed explicitly to `memory_add`. `memory_search` matches both the entry text and its keywords, so a fact stored as "indexing" is still found by a later "indices" or "индекс" query.
 
@@ -194,7 +205,7 @@ System Prompt
 └─────────────────────────────────────────┘
 ```
 
-Set `"memoryPolicyStyle"` to `"full"`, `"compact"`, `"custom"`, or `"none"` to choose policy verbosity while keeping policy-only mode. Set `"memoryMode": "legacy-inject"` to restore the old behavior that injects MEMORY.md, USER.md, project memory, and recent failures into the prompt.
+Set `"memoryPolicyStyle"` to `"full"`, `"compact"`, `"custom"`, or `"none"` to choose policy verbosity.
 
 ## Standing Instructions
 
@@ -214,7 +225,7 @@ They land in a `<standing-instructions>` block placed after the memory policy, s
 | Property | Behavior |
 |---|---|
 | **Provenance** | Stored in `~/.pi/agent/pi-hermes-memory/STANDING.md`. Background review, consolidation, and the correction detector never write there — only your editor or `/memory-pin` can. The agent cannot promote its own memory into this block. |
-| **Budget** | Hard cap of 20 entries / 2,000 characters, separate from `memoryCharLimit` and `userCharLimit`. `/memory-pin` refuses a write past the cap; a hand-edited file over the cap is truncated at injection and the omission is stated loudly inside the block. |
+| **Budget** | Hard cap of 20 entries / 2,000 characters — independent of the memory store, which has no size budget. `/memory-pin` refuses a write past the cap; a hand-edited file over the cap is truncated at injection and the omission is stated loudly inside the block. |
 | **Safety** | Every pin goes through the same `scanContent()` injection/exfiltration scan as any memory write, and the block is fenced. |
 | **Disabling** | Set `"standingInstructionsEnabled": false` to drop the store and the command entirely. |
 
@@ -351,12 +362,12 @@ This lets Pi discover project skills as native skills without copying them into 
 
 ### Memory vs User Profile vs Skills
 
-| Store | File | What goes here | Limit |
+| Store | Storage | What goes here | Limit |
 |---|---|---|---|
-| **memory** | `MEMORY.md` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | 5,000 chars |
-| **user** | `USER.md` | User profile — name, preferences, communication style, habits | 5,000 chars |
+| **memory** | `sessions.db` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | No size limit |
+| **user** | `sessions.db` | User profile — name, preferences, communication style, habits | No size limit |
 | **skills** | `~/.pi/agent/pi-hermes-memory/skills/<slug>/SKILL.md` or `projects-memory/<project>/skills/<slug>/SKILL.md` | Procedures — *how* to debug, deploy, test, or fix something | Unlimited |
-| **extended** | `sessions.db` | Searchable memories beyond the core limit | Unlimited |
+| **failure** | `sessions.db` | Failures, corrections, insights, conventions, tool quirks | No size limit |
 | **sessions** | `sessions.db` | Past conversation history (searchable via FTS5) | Unlimited |
 
 ### Session History Search
@@ -382,20 +393,13 @@ Session history is indexed automatically during the active session and on sessio
 
 For users who prefer source anchors over snippets, `sessionSearch.variant` can be set to `anchors`. In that opt-in mode, the same `session_search` tool reads session JSONL files directly and accepts a Markdown request with fields such as `from`, `to`, `cwd`, and `limit`, plus `all`, `any`, and `exclude` lists. It returns plain text with `count`, an optional `message`, and compact `path:startLine-endLine` style anchors with short reasons instead of summaries or previews.
 
-### Extended Memory Store
+### Memory Storage
 
-The extension keeps Markdown memory as the human-readable source of truth, and mirrors successful writes into the SQLite-backed search store used by `memory_search`.
+Memory is stored **only** in SQLite — the `memories` table in `sessions.db`, indexed by FTS5 and used by `memory_search`.
 
-This means:
-- Fresh `memory_add`, `memory_replace`, and `memory_remove` writes become searchable immediately
-- Older Markdown entries can be backfilled with `/memory-sync-markdown`
-- SQLite search does **not** replace the core Markdown limit
-
-This is the **hybrid memory architecture**:
-- **Core memory** (MEMORY.md/USER.md/failures.md): Human-readable, size-limited, searchable by default
-- **SQLite memory mirror/store** (`sessions.db`): Searchable on demand via `memory_search`
-
-Important: if core Markdown memory is full and consolidation cannot free space, the write still fails. This package does **not** silently spill failed core-memory writes into SQLite-only storage.
+- `memory_add`, `memory_replace`, and `memory_remove` write straight to SQLite and are searchable immediately
+- There is **no size budget**: a write never fails because memory is "full", and nothing is evicted or consolidated to make room
+- Markdown files (`MEMORY.md`, `USER.md`, `failures.md`, project `MEMORY.md`) are legacy artifacts from earlier versions. The extension neither reads nor writes them — they are inert backups you may keep or delete
 
 ### Correction Detection
 
@@ -410,16 +414,11 @@ When you correct the agent, it saves immediately — no waiting for the backgrou
 | "no worries" | ❌ Not a correction — ignored |
 | "actually looks great" | ❌ Not a correction — ignored |
 
-### Auto-Consolidation
+### Consolidation
 
-In `legacy-inject` mode, when memory, user profile, or failure memory hits its character limit, the extension automatically consolidates instead of returning an error:
+Memory lives in SQLite with no size budget, so a write is never rejected for being "too big" and nothing is ever consolidated automatically to free space.
 
-1. Spawns a one-shot `pi.exec()` process with a consolidation prompt
-2. The child agent merges related entries, removes outdated ones, and keeps the most important facts
-3. The parent reloads from disk and retries the original save
-4. If consolidation fails, the original error returns
-
-In `policy-only` mode, SQLite is the query authority, so adds, replacements, and atomic mutation plans can exceed the Markdown export cap without automatic consolidation. You can still trigger consolidation manually with `/memory-consolidate`.
+Consolidation still exists as a **manual** tool: `/memory-consolidate` runs the merge pass (a child agent merges related entries, drops outdated ones, keeps the important facts) when you want the store compacted or deduplicated.
 
 ### Tool-Call-Aware Review
 
@@ -457,11 +456,10 @@ This means skills build up naturally over time without you having to ask.
 |---|---|
 | `/memory-insights` | Shows everything stored in memory and user profile |
 | `/memory-skills` | Opens an interactive skills manager for search, multi-select, move, and delete |
-| `/memory-consolidate` | Manually trigger memory consolidation to free space |
+| `/memory-consolidate` | Manually trigger memory consolidation (merge/deduplicate entries) |
 | `/memory-interview` | Answer a few questions to pre-fill your user profile |
 | `/memory-switch-project` | List all project memories and their entry counts |
 | `/memory-index-sessions` | Import past Pi sessions into the search database |
-| `/memory-sync-markdown` | Backfill Markdown memories into the SQLite search store |
 | `/memory-preview-context` | Preview the memory policy or legacy memory blocks appended to the system prompt |
 | `/learn-memory-tool` | Skill that teaches users how to use the memory system |
 
@@ -521,12 +519,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 ```json
 {
   "lazyInitialization": false,
-  "memoryMode": "policy-only",
   "memoryPolicyStyle": "full",
-  "memoryCharLimit": 5000,
-  "markdownMirror": true,
-  "userCharLimit": 5000,
-  "projectCharLimit": 5000,
   "memoryDir": "~/.pi/agent/pi-hermes-memory",
   "projectsMemoryDir": "projects-memory",
   "sessionSearch": { "variant": "legacy" },
@@ -542,14 +535,11 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "reviewDeltaOnly": true,
   "reviewEnabled": true,
   "reviewTransport": "direct",
-  "memoryOverflowStrategy": "auto-consolidate",
-  "autoConsolidate": true,
   "correctionDetection": true,
   "failureInjectionEnabled": true,
   "failureInjectionMaxAgeDays": 7,
   "failureInjectionMaxEntries": 5,
   "consolidationTimeoutMs": 180000,
-  "overflowGraceMs": 180000,
   "autoConsolidationWarnOnFailure": true,
   "flushOnCompact": true,
   "flushOnShutdown": true,
@@ -559,17 +549,16 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 }
 ```
 
+Legacy keys (`memoryMode`, `markdownMirror`, `memoryCharLimit`, `userCharLimit`, `projectCharLimit`,
+`memoryOverflowStrategy`, `autoConsolidate`, `overflowGraceMs`) are accepted but ignored: memory is
+SQLite-only and has no character budget.
+
 | Setting | Default | Description |
 |---|---|---|
-| `lazyInitialization` | `false` | Opt in to first-use initialization in `policy-only` mode. Defers Markdown/SQLite sync, ordinary memory loading, maintenance and session indexing until a memory operation needs them. `legacy-inject` keeps eager loading to preserve session snapshots. See below for lifecycle tradeoffs. |
-| `memoryMode` | `policy-only` | Prompt behavior: `policy-only` injects only memory policy; `legacy-inject` restores full memory prompt injection |
+| `lazyInitialization` | `false` | Opt in to first-use initialization. Defers ordinary memory loading, extension-root migration, maintenance and session indexing until a memory operation needs them. See below for lifecycle tradeoffs. |
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
 | `standingInstructionsEnabled` | `true` | Inject `STANDING.md` (pinned via `/memory-pin`) into every session, in every memory mode |
-| `memoryCharLimit` | `5000` | Max characters in MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
-| `markdownMirror` | `true` | Mirror SQLite-authoritative memory back into the Markdown files as a human-readable export. In `policy-only` mode, SQLite is the primary write target; set this to `false` to stop writing `MEMORY.md` / `USER.md` / `failures.md` entirely (memory stays fully searchable in SQLite, and reads come from SQLite). `legacy-inject` always writes the Markdown files because it injects memory from them |
-| `userCharLimit` | `5000` | Max characters in USER.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
-| `projectCharLimit` | `5000` | Max characters in project-scoped MEMORY.md in `legacy-inject` mode; policy-only writes may exceed the Markdown export cap |
 | `memoryDir` | `~/.pi/agent/pi-hermes-memory` | Custom directory for extension storage files |
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
@@ -610,7 +599,6 @@ For installations on slow or shared storage, enable:
 
 ```json
 {
-  "memoryMode": "policy-only",
   "lazyInitialization": true
 }
 ```
@@ -627,7 +615,6 @@ Important boundaries:
   startup. Pins in a legacy storage root are read independently of migration or
   SQLite; the primary file, even if empty, takes precedence. `/memory-pin` writes
   to the primary path without dropping the legacy instructions it loaded.
-- `legacy-inject` ignores the lazy option and preserves its startup snapshot.
 - Automatic review, correction capture and flush retain their existing triggers;
   when a trigger fires, it initializes memory before reading or writing it.
   Lazy initialization does not disable automatic learning or its model costs.
@@ -693,42 +680,41 @@ native install scripts are disabled because the fixture writes no memories.
 ```
 ~/.pi/agent/
 ├── pi-hermes-memory/      ← Global extension storage root
-│   ├── MEMORY.md          ← Agent's personal notes (env facts, patterns, lessons)
-│   ├── USER.md            ← User profile (name, preferences, habits)
-│   ├── sessions.db        ← SQLite database (session history + extended memory)
+│   ├── sessions.db        ← SQLite database: ALL memory (global, user, failure) + session history
 │   ├── skills/            ← Global extension-managed skills
 │   │   ├── debug-typescript-errors/
 │   │   │   └── SKILL.md
 │   │   └── testing-checklist/
 │   │       └── SKILL.md
-│   └── .skills-migrated-to-extension-storage
-├── projects-memory/       ← ALL project-scoped memories (one subfolder per project)
+│   ├── MEMORY.md          ← legacy artifact (not read, not written) — safe to delete
+│   ├── USER.md            ← legacy artifact
+│   └── failures.md        ← legacy artifact
+├── projects-memory/       ← Project-scoped skills and legacy project notes
 │   ├── my-project/
-│   │   ├── MEMORY.md
-│   │   └── skills/
-│   │       └── deploy-checklist/
-│   │           └── SKILL.md
+│   │   ├── skills/
+│   │   │   └── deploy-checklist/
+│   │   │       └── SKILL.md
+│   │   └── MEMORY.md      ← legacy artifact (project memory now lives in sessions.db)
 │   └── another-project/
-│       └── MEMORY.md
+│       └── MEMORY.md      ← legacy artifact
 ├── hermes-memory-config.json
 └── ...
 ```
 
-These are plain markdown files. You can read and edit them directly if you want to curate what the agent remembers. Memory entries are separated by `§` (section sign). Skills use Pi-compatible `SKILL.md` files with frontmatter.
+All memory lives in `sessions.db` (table `memories`, FTS5-indexed) — global, user, failure and project-scoped rows. There is no size limit and no file to curate: use `memory_add` / `memory_replace` / `memory_remove` (or `memory_search` to inspect).
+
+Skills stay plain Markdown: Pi-compatible `SKILL.md` files with frontmatter, in the `skills/` folders above.
+
+The `MEMORY.md` / `USER.md` / `failures.md` files are leftovers from the pre-SQLite versions. The extension does not read or write them; keep or delete them as you wish.
 
 If you are upgrading from a version that stored project memory directly at `~/.pi/agent/<project>/MEMORY.md`, the extension copies or merges those entries into `~/.pi/agent/projects-memory/<project>/MEMORY.md` on startup. The old folders are left in place as a backup.
-
-The `sessions.db` SQLite database stores session history and extended memory entries. It's searchable via FTS5 full-text search.
 
 ## Known Limitations
 - **CJK search length**: The trigram tokenizer supports CJK substring search for terms of three or more characters. One- and two-character `memory_search` terms may need a longer phrase or an English/ASCII token.
 
-- **`§` delimiter**: Memory entries are separated by `§` (section sign). If an entry naturally contains `§`, it will be split incorrectly on reload. This is rare in English text but possible. [Hermes uses the same delimiter.]
 - **Background review cost**: Each review cycle costs one full LLM API call via a child `pi -p` process. Correction detection and explicit skill saves can add additional calls when the agent decides they are worth it.
 - **Session search requires indexing**: Past sessions must be indexed before they're searchable. Run `/memory-index-sessions` to bulk-import, or let the extension auto-index on session shutdown.
-- **Older Markdown memories may need backfill**: If you saved memories before the SQLite mirror existed or search looks stale, run `/memory-sync-markdown`.
-- **Core memory limits apply in `legacy-inject` mode**: policy-only writes can exceed the Markdown export cap because SQLite is the query authority, while manual `/memory-consolidate` remains available.
-- **System prompts are invisible**: Pi's TUI does not display the system prompt. Use `/memory-preview-context` to inspect whether policy-only or legacy memory injection is active.
+- **System prompts are invisible**: Pi's TUI does not display the system prompt. Use `/memory-preview-context` to inspect the injected memory policy.
 - **Project skill visibility depends on Pi discovery cycles**: project skills are exposed through `resources_discover` using the active project's `skills/` path. If a moved or newly created project skill doesn't show up immediately in a running session, trigger a reload/new session so Pi refreshes discovered resources.
 - **Project move requires active project context**: in `/memory-skills`, the `p` hotkey is disabled when Pi is not currently in a detected project directory.
 - **Skills still need curation**: Skills are saved by the agent through the `skill_manage` tool when it decides a reusable procedure is worth keeping. They may still need review. You can move, delete, or edit them directly in `~/.pi/agent/pi-hermes-memory/skills/` or the active project's `skills/` folder.

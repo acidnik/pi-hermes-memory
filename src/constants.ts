@@ -24,8 +24,15 @@ export const DEFAULT_BASH_RETRIEVE_KEYWORDS_ONLY = true;
 export const DEFAULT_PROJECTS_MEMORY_DIR = "projects-memory";
 
 // ─── Character limits (not tokens — model-independent) ───
+// Legacy Markdown-budget constants. Memory is SQLite-only now: the file budget
+// and its overflow strategies are neither enforced nor configurable, but the
+// defaults stay for the (unreachable) legacy code path and its tests.
 export const DEFAULT_MEMORY_CHAR_LIMIT = 5000;
-export const DEFAULT_MARKDOWN_MIRROR = true;
+/**
+ * Markdown memory files are no longer written (nor read). The constant stays
+ * `false` so no config value can re-enable the file mirror.
+ */
+export const DEFAULT_MARKDOWN_MIRROR = false;
 export const DEFAULT_USER_CHAR_LIMIT = 5000;
 
 // ─── Learning loop defaults ───

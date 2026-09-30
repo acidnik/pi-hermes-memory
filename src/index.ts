@@ -49,7 +49,6 @@ import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
 import { setupAutoRetrieve, pruneAutoRetrievalRows } from "./handlers/auto-retrieve.js";
 import { setupBashRetrieve } from "./handlers/bash-retrieve.js";
-import { migrateThenSyncMarkdownMemories, registerSyncMarkdownMemoriesCommand } from "./handlers/sync-markdown-memories.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
 import { registerStandingPinCommand } from "./handlers/standing-pin.js";
 import { StandingInstructions } from "./store/standing-instructions.js";
@@ -60,7 +59,7 @@ import { detectProject, detectProjectSkills } from "./project.js";
 import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
 import { AGENT_ROOT } from "./paths.js";
-import { isDatabaseMigrationPending } from "./extension-root-migration.js";
+import { isDatabaseMigrationPending, migrateExtensionRoot } from "./extension-root-migration.js";
 import { measureLifecycle, measureLifecycleSync } from "./lifecycle-timing.js";
 import { createMemoryInitializer, withMemoryInitialization, type EnsureMemoryReady } from "./memory-initialization.js";
 import { setCurrentSessionId } from "./session-id.js";
@@ -94,7 +93,7 @@ export function registerProjectSkillDiscoveryHandler(
 
 export default function (pi: ExtensionAPI) {
   const config = loadConfig();
-  const lazy = config.lazyInitialization === true && config.memoryMode === "policy-only";
+  const lazy = config.lazyInitialization === true;
   let sessionContext: ExtensionContext | undefined;
 
   const agentRoot = AGENT_ROOT;
@@ -204,23 +203,22 @@ export default function (pi: ExtensionAPI) {
     if (!persistenceInitialized) {
       try {
         await measureLifecycle(`${timingPrefix}.persistence-sync`, async () => {
-          await migrateThenSyncMarkdownMemories(
-            dbManager,
-            shouldMigrateExtensionRoot ? legacyGlobalDir : null,
-            globalDir,
-            config.projectsMemoryDir,
-            agentRoot,
-            {
-              onMigrationSucceeded: () => {
-                databaseMigrationPending = false;
-              },
-            },
-          );
+          // Relocate the legacy extension root (sessions.db, skills, …) but do
+          // NOT sync Markdown memories into SQLite: the files are legacy
+          // artifacts and a stale one must never delete rows written since.
+          if (shouldMigrateExtensionRoot) {
+            const migration = await migrateExtensionRoot(legacyGlobalDir, globalDir);
+            const sessionsFailure = migration.criticalFailures.find((failure) => failure.name === "sessions.db");
+            if (sessionsFailure) {
+              throw new Error(`sessions.db migration failed: ${sessionsFailure.message}`);
+            }
+          }
+          databaseMigrationPending = false;
         });
         persistenceInitialized = true;
       } catch (error) {
         if (lazy) throw error;
-        // Best-effort only: migration or SQLite backfill must not block startup.
+        // Best-effort only: migration must not block startup.
       }
     }
 
@@ -373,7 +371,6 @@ export default function (pi: ExtensionAPI) {
   registerInterviewCommand(memoryPi, store);
   registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);
-  registerSyncMarkdownMemoriesCommand(memoryPi, dbManager, globalDir, config.projectsMemoryDir, agentRoot);
   registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectNameRef, config, standingStore);
   if (standingStore) registerStandingPinCommand(pi, standingStore);
 

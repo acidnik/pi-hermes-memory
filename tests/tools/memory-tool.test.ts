@@ -173,8 +173,8 @@ describe("registerMemoryTool", () => {
       consolidationTimeoutMs: 60000,
       memoryDir: tmpDir,
     });
-    await store.loadFromDisk();
     registerMemoryTool(mockPi, store, null, dbManager);
+    await store.loadFromDisk();
     const first = await capturedResult.execute("tc-1", { action: "add", target: "memory", content: "alpha entry" }, undefined as any, undefined as any, undefined as any);
     assert.strictEqual(first.details.success, true);
     const second = await capturedResult.execute("tc-2", { action: "add", target: "memory", content: "beta entry past the tiny cap" }, undefined as any, undefined as any, undefined as any);
@@ -209,10 +209,11 @@ describe("registerMemoryTool", () => {
       consolidationTimeoutMs: 60000,
       memoryDir: tmpDir,
     });
+    // SQLite is the only store: the failure entry must land in the database.
+    registerMemoryTool(mockPi, store, null, dbManager);
     await store.loadFromDisk();
     await store.addFailure("use pnpm for lockfiles", { category: "correction" });
 
-    registerMemoryTool(mockPi, store, null);
     const result = await removeTool.execute(
       "tc-1",
       { target: "memory", old_text: "use pnpm for lockfiles" },
@@ -253,10 +254,10 @@ describe("registerMemoryTool", () => {
       consolidationTimeoutMs: 60000,
       memoryDir: tmpDir,
     });
+    registerMemoryTool(mockPi, store, null, dbManager);
     await store.loadFromDisk();
     syncMemoryEntry(dbManager, { content: "orphaned row", target: "memory", project: null });
 
-    registerMemoryTool(mockPi, store, null, dbManager);
     await capturedResult.execute(
       "tc-1",
       { action: "add", target: "memory", content: "authoritative Markdown row" },
@@ -280,6 +281,8 @@ describe("registerMemoryTool", () => {
     } as unknown as ExtensionAPI;
     const store = new MemoryStore({
       memoryMode: "policy-only",
+      // The mirror is opt-in; this test exercises the mirror-write seam race.
+      markdownMirror: true,
       memoryCharLimit: 5000,
       userCharLimit: 5000,
       projectCharLimit: 5000,
@@ -297,6 +300,7 @@ describe("registerMemoryTool", () => {
       consolidationTimeoutMs: 60000,
       memoryDir: tmpDir,
     });
+    registerMemoryTool(mockPi, store, null, dbManager);
     await store.loadFromDisk();
 
     const originalMirror = (store as any).writeMarkdownMirror.bind(store);
@@ -313,7 +317,6 @@ describe("registerMemoryTool", () => {
       return null;
     };
 
-    registerMemoryTool(mockPi, store, null, dbManager);
     await capturedResult.execute(
       "tc-1",
       { action: "add", target: "memory", content: "first writer" },

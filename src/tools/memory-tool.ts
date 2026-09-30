@@ -176,7 +176,7 @@ async function syncReplaceToSqlite(
     });
 
     if (syncResult.matched === 0) {
-      return "Saved to Markdown, but no matching SQLite memory row was updated. Run /memory-sync-markdown if search results look stale.";
+      return "Saved to Markdown, but no matching SQLite memory row was updated (search results may be stale).";
     }
 
     return null;
@@ -202,7 +202,7 @@ async function syncRemoveFromSqlite(
     });
 
     if (syncResult.matched === 0) {
-      return "Saved to Markdown, but no matching SQLite memory row was removed. Run /memory-sync-markdown if search results look stale.";
+      return "Saved to Markdown, but no matching SQLite memory row was removed (search results may be stale).";
     }
 
     return null;

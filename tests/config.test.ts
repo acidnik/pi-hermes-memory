@@ -77,8 +77,6 @@ describe("loadConfig", () => {
     // Write a config file
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      memoryCharLimit: 3000,
-      memoryMode: "legacy-inject",
       memoryPolicyStyle: "custom",
       memoryPolicyCustomText: "<memory-policy>Custom</memory-policy>",
       nudgeInterval: 15,
@@ -95,10 +93,9 @@ describe("loadConfig", () => {
       quickCheckOnOpen: false,
     }));
     const config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.memoryMode, "legacy-inject");
+    assert.strictEqual(config.memoryMode, "policy-only"); // memoryMode is no longer configurable
     assert.strictEqual(config.memoryPolicyStyle, "custom");
     assert.strictEqual(config.memoryPolicyCustomText, "<memory-policy>Custom</memory-policy>");
-    assert.strictEqual(config.memoryCharLimit, 3000);
     assert.strictEqual(config.nudgeInterval, 15);
     assert.strictEqual(config.reviewRecentMessages, 25);
     assert.strictEqual(config.reviewDeltaOnly, false);
@@ -129,14 +126,14 @@ describe("loadConfig", () => {
     assert.strictEqual(loadConfig(TEST_CONFIG_PATH).quickCheckOnOpen, true);
   });
 
-  it("only accepts boolean markdownMirror overrides and defaults to true", () => {
+  it("ignores markdownMirror: Markdown memory files are never written", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ markdownMirror: "false" }));
-    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, true);
-    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ markdownMirror: false }));
-    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, false);
+    for (const value of [true, false, "false"] as const) {
+      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ markdownMirror: value }));
+      assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, false);
+    }
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ reviewEnabled: false }));
-    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, true);
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).markdownMirror, false);
   });
 
   it("parses the optional autoRetrieve block and ignores invalid values", () => {
@@ -346,11 +343,15 @@ describe("loadConfig", () => {
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
       unknownKey: "value",
       anotherKey: 123,
+      // Deprecated keys are ignored like any unknown key.
       memoryCharLimit: 1000,
+      memoryMode: "legacy-inject",
+      markdownMirror: true,
     }));
     const config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.memoryCharLimit, 1000);
+    assert.strictEqual(config.memoryCharLimit, 5000);
     assert.strictEqual(config.memoryMode, "policy-only");
+    assert.strictEqual(config.markdownMirror, false);
     assert.strictEqual(config.reviewEnabled, true);
   });
 
@@ -395,17 +396,6 @@ describe("loadConfig", () => {
     }));
     config = loadConfig(TEST_CONFIG_PATH);
     assert.strictEqual(config.memoryPolicyCustomText, undefined);
-  });
-
-  it("accepts valid memoryOverflowStrategy values", () => {
-    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
-
-    for (const policy of ["auto-consolidate", "reject", "fifo-evict"] as const) {
-      fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ memoryOverflowStrategy: policy }));
-      const config = loadConfig(TEST_CONFIG_PATH);
-      assert.strictEqual(config.memoryOverflowStrategy, policy);
-      assert.strictEqual(config.autoConsolidate, policy === "auto-consolidate");
-    }
   });
 
   it("accepts valid sessionSearch variants", () => {
@@ -462,47 +452,21 @@ describe("loadConfig", () => {
     assert.deepStrictEqual(config.sessionSearch, { variant: "legacy" });
   });
 
-  it("ignores invalid memoryOverflowStrategy values", () => {
+  it("ignores overflow/cap keys: memory has no size budget", () => {
     fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      memoryOverflowStrategy: "invalid",
+      memoryOverflowStrategy: "fifo-evict",
+      autoConsolidate: false,
+      overflowGraceMs: 1,
+      memoryCharLimit: 1,
+      userCharLimit: 1,
+      projectCharLimit: 1,
     }));
     const config = loadConfig(TEST_CONFIG_PATH);
     assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
     assert.strictEqual(config.autoConsolidate, true);
-  });
-
-  it("maps legacy autoConsolidate boolean to memoryOverflowStrategy when strategy is absent", () => {
-    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
-
-    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ autoConsolidate: false }));
-    let config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.autoConsolidate, false);
-    assert.strictEqual(config.memoryOverflowStrategy, "reject");
-
-    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ autoConsolidate: true }));
-    config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.autoConsolidate, true);
-    assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
-  });
-
-  it("lets explicit memoryOverflowStrategy override legacy autoConsolidate", () => {
-    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      autoConsolidate: true,
-      memoryOverflowStrategy: "fifo-evict",
-    }));
-    let config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.memoryOverflowStrategy, "fifo-evict");
-    assert.strictEqual(config.autoConsolidate, false);
-
-    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      autoConsolidate: false,
-      memoryOverflowStrategy: "auto-consolidate",
-    }));
-    config = loadConfig(TEST_CONFIG_PATH);
-    assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
-    assert.strictEqual(config.autoConsolidate, true);
+    assert.strictEqual(config.memoryCharLimit, 5000);
+    assert.strictEqual(config.userCharLimit, 5000);
   });
 
   it("accepts correction pattern string arrays including empty arrays", () => {

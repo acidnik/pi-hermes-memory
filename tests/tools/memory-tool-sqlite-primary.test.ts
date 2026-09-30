@@ -74,8 +74,10 @@ describe("registerMemoryTool — SQLite-primary write path", () => {
     } as unknown as Parameters<typeof registerMemoryTool>[0];
 
     const store = new MemoryStore(policyOnlyConfig(tmpDir, { markdownMirror: false }) as any);
-    await store.loadFromDisk();
+    // Wire the SQLite write path first: SQLite is the only source now, so a
+    // load without it fails instead of falling back to Markdown.
     registerMemoryTool(mockPi, store, null, dbManager);
+    await store.loadFromDisk();
 
     const added = await capturedResult.execute(
       "tc-1",
@@ -124,7 +126,7 @@ describe("registerMemoryTool — SQLite-primary write path", () => {
     assert.equal(fs.existsSync(path.join(tmpDir, MEMORY_FILE)), false);
   });
 
-  it("policy-only with default mirror writes Markdown as a human-readable export", async () => {
+  it("policy-only with an explicit mirror opt-in writes Markdown as a human-readable export", async () => {
     let capturedResult: any;
     const mockPi = {
       registerTool: (def: any) => {
@@ -132,9 +134,9 @@ describe("registerMemoryTool — SQLite-primary write path", () => {
       },
     } as unknown as Parameters<typeof registerMemoryTool>[0];
 
-    const store = new MemoryStore(policyOnlyConfig(tmpDir) as any);
-    await store.loadFromDisk();
+    const store = new MemoryStore(policyOnlyConfig(tmpDir, { markdownMirror: true }) as any);
     registerMemoryTool(mockPi, store, null, dbManager);
+    await store.loadFromDisk();
 
     await capturedResult.execute(
       "tc-1",
@@ -158,8 +160,8 @@ describe("registerMemoryTool — SQLite-primary write path", () => {
 
     // First session writes into SQLite with the mirror disabled.
     const store1 = new MemoryStore(policyOnlyConfig(tmpDir, { markdownMirror: false }) as any);
-    await store1.loadFromDisk();
     registerMemoryTool(mockPi, store1, null, dbManager);
+    await store1.loadFromDisk();
     await capturedResult.execute(
       "tc-1",
       { action: "add", target: "memory", content: "persistent note" },
@@ -191,8 +193,8 @@ describe("registerMemoryTool — SQLite-primary write path", () => {
     } as unknown as Parameters<typeof registerMemoryTool>[0];
 
     const store = new MemoryStore(policyOnlyConfig(tmpDir, { markdownMirror: false }) as any);
-    await store.loadFromDisk();
     registerMemoryTool(mockPi, store, null, dbManager);
+    await store.loadFromDisk();
 
     await capturedResult.execute(
       "tc-1",
@@ -310,5 +312,63 @@ describe("MemoryStore — SQLite-primary adapter contract", () => {
     store.setSqliteScopeLoader(async (target) => state[target] ?? []);
     await store.loadFromDisk();
     assert.deepStrictEqual(store.getMemoryEntries(), ["imported from sqlite"]);
+  });
+
+  it("loadFromDisk throws instead of falling back to Markdown when no SQLite loader is wired", async () => {
+    fs.writeFileSync(path.join(tmpDir, USER_FILE), "legacy user entry");
+    const store = new MemoryStore(policyOnlyConfig(tmpDir) as any);
+    await assert.rejects(
+      () => store.loadFromDisk(),
+      /Markdown files are no longer read/,
+    );
+  });
+
+  // Regression: startup used to reconcile SQLite from the Markdown files and
+  // DELETE every row the (frozen) files did not contain, so memories written in
+  // an earlier session silently disappeared on the next pi start.
+  it("a fresh startup keeps SQLite rows that the stale Markdown files do not contain", async () => {
+    const dbManager = new DatabaseManager(tmpDir);
+    try {
+      const staleUserFile = path.join(tmpDir, USER_FILE);
+    fs.writeFileSync(staleUserFile, "STALE entry that only exists in Markdown");
+    fs.writeFileSync(path.join(tmpDir, MEMORY_FILE), "STALE memory entry from Markdown");
+
+    const wire = (store: MemoryStore) => {
+      const mockPi = { registerTool: () => {} } as unknown as Parameters<typeof registerMemoryTool>[0];
+      registerMemoryTool(mockPi, store, null, dbManager);
+    };
+
+    // Session 1: a normal write lands in SQLite.
+    const writer = new MemoryStore(policyOnlyConfig(tmpDir) as any);
+    wire(writer);
+    await writer.loadFromDisk();
+    const added = await writer.add("user", "FRESH user entry written after the Markdown snapshot");
+    assert.equal(added.success, true, added.error);
+
+    // Session 2 (new pi process, same database): startup load must keep the
+    // fresh row and must not resurrect or import anything from the files.
+    const reader = new MemoryStore(policyOnlyConfig(tmpDir) as any);
+    wire(reader);
+    await reader.loadFromDisk();
+
+    const entries = reader.getUserEntries();
+    assert.ok(
+      entries.some((entry) => entry.includes("FRESH user entry")),
+      `fresh SQLite row survived startup, got: ${JSON.stringify(entries)}`,
+    );
+    assert.ok(
+      !entries.some((entry) => entry.includes("STALE entry that only exists in Markdown")),
+      "stale Markdown entry was not imported",
+    );
+
+      // The files are left exactly as they were — never read, never rewritten.
+      assert.equal(fs.readFileSync(staleUserFile, "utf-8"), "STALE entry that only exists in Markdown");
+      assert.deepStrictEqual(
+        getMemories(dbManager, { target: "user", project: null }).map((row) => row.content),
+        ["FRESH user entry written after the Markdown snapshot"],
+      );
+    } finally {
+      dbManager.close();
+    }
   });
 });

@@ -50,6 +50,19 @@ function makeConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
   };
 }
 
+/**
+ * Minimal in-memory stand-in for the SQLite-primary store: policy-only mode
+ * reads and writes through these hooks and never touches Markdown files.
+ */
+function attachInMemorySqlite(store: MemoryStore): void {
+  const written: Record<string, string[]> = {};
+  store.setSqlitePrimaryWriter(async (target, entries) => {
+    written[target] = entries;
+    return null;
+  });
+  store.setSqliteScopeLoader(async (target) => written[target] ?? []);
+}
+
 /** Read raw file content, return "" if missing. */
 async function readRaw(filePath: string): Promise<string> {
   try {
@@ -201,6 +214,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         ...config,
         memoryDir: path.join(MEMORY_DIR, "project"),
       });
+      // SQLite is the only store in policy-only mode: wire it explicitly.
+      attachInMemorySqlite(store);
+      attachInMemorySqlite(projectStore);
       let consolidatorCalls = 0;
       const consolidator = async () => {
         consolidatorCalls++;
@@ -660,6 +676,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         ...config,
         memoryDir: path.join(MEMORY_DIR, "project-replace"),
       });
+      // SQLite is the only store in policy-only mode: wire it explicitly.
+      attachInMemorySqlite(store);
+      attachInMemorySqlite(projectStore);
       let consolidatorCalls = 0;
       const consolidator = async () => {
         consolidatorCalls++;
@@ -1414,6 +1433,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         ...config,
         memoryDir: path.join(MEMORY_DIR, "project-batch"),
       });
+      // SQLite is the only store in policy-only mode: wire it explicitly.
+      attachInMemorySqlite(store);
+      attachInMemorySqlite(projectStore);
       let consolidatorCalls = 0;
       const consolidator = async () => {
         consolidatorCalls++;
