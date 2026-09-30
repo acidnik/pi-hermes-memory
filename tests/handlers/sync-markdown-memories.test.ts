@@ -47,7 +47,6 @@ describe('memory sqlite sync + markdown backfill', () => {
         success: true,
         target: 'memory',
         entries: ['sync token 2026-05-09'],
-        usage: '1% — 20/5000 chars',
         entry_count: 1,
         message: 'Entry added.',
       }),

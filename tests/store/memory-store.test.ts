@@ -134,7 +134,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
   // ─── add() tests ───
 
   describe("add()", () => {
-    it("persists entry to file and returns success with usage stats", async () => {
+    it("persists entry to file and returns success stats", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
 
@@ -143,8 +143,6 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       assert.ok(result.success);
       assert.equal(result.target, "memory");
-      assert.ok(result.usage);
-      assert.ok(result.usage!.includes("chars"));
       assert.equal(result.entry_count, 1);
       assert.equal(result.message, "Entry added.");
       assert.equal(result.entries, undefined);
@@ -429,7 +427,6 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(!result.success);
       assert.match(result.error ?? "", /see the entries list below/);
       assert.equal(result.target, "memory");
-      assert.match(result.usage ?? "", /^\d+\/140 chars$/);
       assert.equal(result.entry_count, 2);
       assert.deepEqual(result.entries, [first, second]);
 
@@ -456,7 +453,6 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(!result.success);
       assert.match(result.error ?? "", /see the entries list below/);
       assert.equal(result.target, "memory");
-      assert.match(result.usage ?? "", /^\d+\/80 chars$/);
       assert.equal(result.entry_count, 1);
       assert.deepEqual(result.entries, [existing]);
 
@@ -521,7 +517,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       // Embedded delimiters are not escaped. After the write is published we
       // re-read disk as source of truth, so the single logical add surfaces as
-      // two entries (and usage/entry_count match the split file).
+      // two entries (and entry_count matches the split file).
       assert.ok(result.success);
       assert.equal(result.entry_count, 2);
       const raw = await readRaw(memoryPath);
@@ -2187,7 +2183,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.match(await readRaw(userPath), /independent user writer/);
     });
 
-    it("reloads truncated disk before add and reports disk-backed usage", async () => {
+    it("reloads truncated disk before add", async () => {
       const store = new MemoryStore(makeConfig({ memoryCharLimit: 5000 }));
       await store.loadFromDisk();
       for (let i = 0; i < 5; i++) {
@@ -2200,7 +2196,6 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       assert.equal(result.success, true);
       assert.equal(result.entry_count, 1);
-      assert.match(result.usage ?? "", /^1% — \d+\/5000 chars$/);
       assert.equal(await readRaw(memoryPath), `${TEST_MARKER} after-truncate <!-- created=${new Date().toISOString().split("T")[0]}, last=${new Date().toISOString().split("T")[0]} -->`);
     });
 

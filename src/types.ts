@@ -207,7 +207,6 @@ export interface MemoryResult {
   warnings?: string[];
   target?: "memory" | "user" | "failure" | "project";
   entries?: string[];
-  usage?: string;
   entry_count?: number;
   evicted_entries?: string[];
   evicted_count?: number;

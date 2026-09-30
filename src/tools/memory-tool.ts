@@ -56,7 +56,6 @@ function formatMemoryToolText(result: MemoryResult): string {
     });
 
     lines.push("If one of these entries should stay active, add it again.");
-    if (result.usage) lines.push(`Usage: ${result.usage}`);
     return lines.join("\n").trim();
   }
 

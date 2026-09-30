@@ -477,7 +477,6 @@ export class MemoryStore {
       success: false,
       error: `Memory at ${current}/${limit} chars. Adding this entry (${contentLength} chars) would exceed the limit. Replace or remove existing entries first (see the entries list below), then retry this add — all in this turn.`,
       target,
-      usage: `${current}/${limit} chars`,
       entry_count: entries.length,
       entries,
     };
@@ -842,14 +841,10 @@ export class MemoryStore {
 
   private successResponse(target: "memory" | "user" | "failure", message?: string): MemoryResult {
     const entries = this.entriesFor(target);
-    const current = this.charCount(target);
-    const limit = this.charLimit(target);
-    const pct = limit > 0 ? Math.min(100, Math.floor((current / limit) * 100)) : 0;
 
     const resp: MemoryResult = {
       success: true,
       target,
-      usage: `${pct}% — ${current}/${limit} chars`,
       entry_count: entries.length,
     };
     if (message) resp.message = message;

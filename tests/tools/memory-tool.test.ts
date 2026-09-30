@@ -50,7 +50,7 @@ describe("registerMemoryTool", () => {
     }
   });
 
-  it("execute add returns JSON with usage field", async () => {
+  it("execute add returns JSON with entry count", async () => {
     let capturedResult: any;
 
     const mockPi = {
@@ -64,7 +64,6 @@ describe("registerMemoryTool", () => {
         success: true,
         target: "memory",
         entries: ["Entry one"],
-        usage: "5% — 110/5000 chars",
         entry_count: 1,
         message: "Entry added.",
       }),
@@ -76,8 +75,6 @@ describe("registerMemoryTool", () => {
     assert.strictEqual(result.content[0].type, "text", "content should be text type");
     const parsed = JSON.parse(result.content[0].text);
     assert.strictEqual(parsed.success, true, "result should be success");
-    assert.ok(parsed.usage.includes("chars"), "usage should contain 'chars'");
-    assert.ok(parsed.usage.includes("5000"), "usage should show total limit");
     assert.strictEqual(parsed.entry_count, 1, "entry_count should be 1");
     assert.strictEqual(result.details.success, true, "details should mirror result");
   });
@@ -98,7 +95,6 @@ describe("registerMemoryTool", () => {
         success: true,
         target: "memory",
         entries: ["New entry"],
-        usage: "90% — 4500/5000 chars",
         entry_count: 1,
         message: "Memory updated. Rotated 2 older entries to stay within the limit.",
         evicted_entries: [evictedOne, evictedTwo],
@@ -116,7 +112,6 @@ describe("registerMemoryTool", () => {
     assert.ok(text.includes(`1. ${evictedOne}`));
     assert.ok(text.includes(`2. ${evictedTwo}`));
     assert.match(text, /If one of these entries should stay active, add it again\./);
-    assert.match(text, /Usage: 90%/);
     assert.deepStrictEqual(result.details.evicted_entries, [evictedOne, evictedTwo]);
   });
 
@@ -133,7 +128,6 @@ describe("registerMemoryTool", () => {
         success: true,
         target: "memory",
         entries: ["Entry one"],
-        usage: "5% — 110/5000 chars",
         entry_count: 1,
         message: "Entry added.",
       }),
@@ -352,7 +346,6 @@ describe("registerMemoryTool", () => {
         success: true,
         target: "memory",
         entries: ["New entry"],
-        usage: "90% — 4500/5000 chars",
         entry_count: 1,
         message: "Memory updated. Rotated 1 older entry to stay within the limit.",
         evicted_entries: ["Older entry"],
@@ -392,7 +385,6 @@ describe("registerMemoryTool", () => {
         success: true,
         target: "memory",
         entries: ["Project replacement"],
-        usage: "90% — 4500/5000 chars",
         entry_count: 1,
         message: "Memory updated. Rotated 1 older entry to stay within the limit.",
         evicted_entries: ["Shared wording"],
@@ -425,7 +417,6 @@ describe("registerMemoryTool", () => {
           success: true,
           target,
           entries: ["Project entry"],
-          usage: "2% — 20/5000 chars",
           entry_count: 1,
           message: "Entry added.",
         };
@@ -463,7 +454,6 @@ describe("registerMemoryTool", () => {
           success: true,
           target,
           entries: [content],
-          usage: "2% — 20/5000 chars",
           entry_count: 1,
           message: "Entry added.",
         };
@@ -544,7 +534,6 @@ describe("registerMemoryTool", () => {
         success: true,
         target: "memory",
         entries: ["Entry one"],
-        usage: "5% — 110/5000 chars",
         entry_count: 1,
         message: "Entry added.",
       }),
@@ -671,7 +660,7 @@ describe("registerMemoryTool", () => {
     const mockStore = {
       remove: (...args: any[]) => {
         removeArgs = args;
-        return { success: true, target: "memory", entries: [], usage: "0% — 0/5000 chars", entry_count: 0 };
+        return { success: true, target: "memory", entries: [], entry_count: 0 };
       },
     } as unknown as MemoryStore;
 
@@ -694,7 +683,7 @@ describe("registerMemoryTool", () => {
     const mockStore = {
       replace: (...args: any[]) => {
         replaceArgs = args;
-        return { success: true, target: "memory", entries: ["new"], usage: "5% — 110/5000 chars", entry_count: 1 };
+        return { success: true, target: "memory", entries: ["new"], entry_count: 1 };
       },
     } as unknown as MemoryStore;
 
@@ -718,7 +707,6 @@ describe("registerMemoryTool", () => {
         success: true,
         target: "memory",
         entries: ["from session cwd"],
-        usage: "2% — 20/5000 chars",
         entry_count: 1,
         message: "Entry added.",
       }),

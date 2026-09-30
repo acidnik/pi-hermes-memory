@@ -73,7 +73,6 @@ export function memoryResultView(result: unknown): SharedOutputView {
   if (category) parts.push(`category: ${category}`);
   if (evicted > 0) parts.push(`evicted: ${evicted}`);
   if (typeof data.entry_count === "number") parts.push(`${data.entry_count} ${data.entry_count === 1 ? "entry" : "entries"}`);
-  if (typeof data.usage === "string" && data.usage.trim()) parts.push(data.usage.trim());
   const warning = warningText(data);
   if (warning) parts.push(`Warning: ${warning}`);
   return { ...base, status: "success", summary: parts.join(" · ") };

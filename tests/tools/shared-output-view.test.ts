@@ -284,7 +284,6 @@ describe("tool-specific summaries", () => {
       target: "failure",
       category: "tool-quirk",
       entry_count: 2,
-      usage: "120 / 5,000 chars",
     });
     const memory = memoryResultView(result(memoryText, JSON.parse(memoryText)));
     assert.match(memory.summary, /Saved/);
@@ -329,7 +328,6 @@ describe("tool-specific summaries", () => {
       target: "failure",
       message: "Failure memory saved: tool-quirk",
       entry_count: 16,
-      usage: "92% — 9271/10000 chars",
     };
     const fullText = JSON.stringify(details);
     const toolResult = result(fullText, details);
@@ -339,7 +337,7 @@ describe("tool-specific summaries", () => {
     assert.equal(view.status, "success");
     assert.equal(
       view.summary,
-      "Saved · target: failure · category: tool-quirk · 16 entries · 92% — 9271/10000 chars",
+      "Saved · target: failure · category: tool-quirk · 16 entries",
     );
     assert.doesNotMatch(view.summary, /^failure:/);
     assert.equal(view.expandedText, fullText);
@@ -355,7 +353,7 @@ describe("tool-specific summaries", () => {
     );
     assert.match(
       collapsed,
-      /Saved · target: failure · category: tool-quirk · 16 entries · 92% — 9271\/10000 chars/,
+      /Saved · target: failure · category: tool-quirk · 16 entries/,
     );
     assert.doesNotMatch(collapsed, /^failure:/);
   });
