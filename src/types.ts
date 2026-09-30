@@ -88,26 +88,23 @@ export interface BashRetrieveConfig {
 export interface MemoryConfig {
   /** Defer policy-only memory initialization until first use. Default: false */
   lazyInitialization?: boolean;
-  /** Prompt memory mode. Default: policy-only */
+  /**
+   * RETIRED — not parsed from the config file. Memory is SQLite-only: the
+   * Markdown file layer is unreachable, so any value other than `policy-only`
+   * is ignored. Kept as a type for the (test-only) legacy file path.
+   */
   memoryMode: "policy-only" | "legacy-inject";
   /** Policy prompt style used when memoryMode is policy-only. Default: full */
   memoryPolicyStyle?: "full" | "compact" | "custom" | "none";
   /** Custom policy prompt text used when memoryPolicyStyle is custom */
   memoryPolicyCustomText?: string;
-  /** Max chars for MEMORY.md (agent notes). Default: 5000 */
+  /** RETIRED — legacy Markdown budget, no longer enforced or configurable. */
   memoryCharLimit: number;
-  /**
-   * Mirror SQLite-authoritative memory back into the Markdown files
-   * (MEMORY.md / USER.md / failures.md) as a human-readable export.
-   * Default: true. When false, Markdown files are left untouched by memory
-   * writes and reads come from SQLite (policy-only mode; searchable and
-   * unlimited). The legacy-inject mode always writes Markdown because it
-   * injects memory into the system prompt from those files.
-   */
+  /** RETIRED — Markdown files are never written. Not parsed from config. */
   markdownMirror?: boolean;
-  /** Max chars for USER.md (user profile). Default: 5000 */
+  /** RETIRED — legacy Markdown budget, no longer enforced or configurable. */
   userCharLimit: number;
-  /** Max chars for project-level MEMORY.md. Default: 5000 */
+  /** RETIRED — legacy Markdown budget, no longer enforced or configurable. */
   projectCharLimit: number;
   /** Turns between background auto-reviews. Default: 10 */
   nudgeInterval: number;
@@ -152,11 +149,11 @@ export interface MemoryConfig {
   llmThinkingOverride?: ThinkingLevel;
   /** Trusted Pi extension sources required by child processes, such as custom providers or auth adapters. */
   childExtensionPaths?: string[];
-  /** Strategy when memory is full. Default: auto-consolidate */
+  /** RETIRED — memory has no size budget. Not parsed from config. */
   memoryOverflowStrategy?: MemoryOverflowStrategy;
-  /** Wall-clock grace after overflow before automatic consolidation. Default: 180000 */
+  /** RETIRED — memory has no size budget. Not parsed from config. */
   overflowGraceMs?: number;
-  /** Legacy alias for memoryOverflowStrategy. Default: true */
+  /** RETIRED — auto-consolidation on overflow is gone (no budget to overflow). */
   autoConsolidate: boolean;
   /** Detect user corrections and trigger immediate memory save. Default: true */
   correctionDetection: boolean;

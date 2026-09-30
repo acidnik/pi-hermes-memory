@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Markdown memory files are gone — memory is SQLite-only**: `MEMORY.md`, `USER.md`, `failures.md` and `projects-memory/<project>/MEMORY.md` are no longer read or written. Everything lives in the FTS5-searchable `memories` table in `sessions.db`, with **no size budget**: a write can no longer fail because memory is "full", and nothing is evicted or automatically consolidated to make room. The config keys `memoryMode`, `markdownMirror`, `memoryCharLimit`, `userCharLimit`, `projectCharLimit`, `memoryOverflowStrategy`, `autoConsolidate` and `overflowGraceMs` are retired — they are accepted and ignored. `/memory-sync-markdown` is gone; manual `/memory-consolidate` remains for deduplication. Existing files stay on disk as inert backups and are never touched again, so entries that exist **only** in those files are no longer returned by `memory_search`.
+
+### Fixed
+
+- **Startup no longer resets memory to the Markdown snapshot**: every session start reconciled SQLite from the Markdown files and deleted every row they did not contain. With the mirror disabled (or merely stale) that silently removed everything written since the files were last written — in one live case 19 days of memories, including entries saved minutes earlier. Startup now runs only the one-time extension-root relocation and never reads Markdown, so SQLite rows survive restarts.
+
 ### Changed
 
 - **Background auto-review now consumes only the conversation delta**: each run reviews just the portion of the session branch that no previous auto-review has seen (the entry after the last reviewed one), instead of resending the whole conversation every N turns — a large token saving on long sessions. The prompt marks the slice (`--- Conversation to Review (new portion since the last auto-review) ---`) and the current-memory sections keep guarding duplicates. The pointer advances only when a review actually ran (direct `ok`/`empty` or subprocess exit 0), so a failed transport retries the same fragment on the next nudge; the first review in a process still covers the whole branch. Config: `reviewDeltaOnly` (default `true`); set `false` for the previous whole-session behaviour.

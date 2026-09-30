@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AutoRetrieveTarget, MemoryConfig, MemoryOverflowStrategy, ReviewTransport, SessionSearchVariant, ThinkingLevel } from "./types.js";
+import type { AutoRetrieveTarget, MemoryConfig, ReviewTransport, SessionSearchVariant, ThinkingLevel } from "./types.js";
 import {
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_MARKDOWN_MIRROR,
@@ -20,17 +20,12 @@ import {
 } from "./constants.js";
 import { AGENT_ROOT, normalizeConfiguredMemoryDir, normalizeProjectsMemoryDir } from "./paths.js";
 
-const MEMORY_OVERFLOW_STRATEGIES: readonly MemoryOverflowStrategy[] = ["auto-consolidate", "reject", "fifo-evict"];
 const SESSION_SEARCH_VARIANTS: readonly SessionSearchVariant[] = ["legacy", "anchors"];
 const REVIEW_TRANSPORTS: readonly ReviewTransport[] = ["direct", "subprocess"];
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 function isReviewTransport(value: unknown): value is ReviewTransport {
   return typeof value === "string" && REVIEW_TRANSPORTS.includes(value as ReviewTransport);
-}
-
-function isMemoryOverflowStrategy(value: unknown): value is MemoryOverflowStrategy {
-  return typeof value === "string" && MEMORY_OVERFLOW_STRATEGIES.includes(value as MemoryOverflowStrategy);
 }
 
 function isSessionSearchVariant(value: unknown): value is SessionSearchVariant {
@@ -93,10 +88,11 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       const isStringArray = (value: unknown): value is string[] => (
         Array.isArray(value) && value.every((item) => typeof item === "string")
       );
-      let hasLegacyAutoConsolidate = false;
-      let hasMemoryOverflowStrategy = false;
       if (typeof parsed.lazyInitialization === "boolean") config.lazyInitialization = parsed.lazyInitialization;
-      if (parsed.memoryMode === "policy-only" || parsed.memoryMode === "legacy-inject") config.memoryMode = parsed.memoryMode;
+      // Deprecated and deliberately ignored: memoryMode, markdownMirror,
+      // memoryCharLimit, userCharLimit, autoConsolidate, memoryOverflowStrategy,
+      // overflowGraceMs. Memory lives only in SQLite and has no size budget, so
+      // these keys no longer change behaviour (accepted like any unknown key).
       if (
         parsed.memoryPolicyStyle === "full" ||
         parsed.memoryPolicyStyle === "compact" ||
@@ -104,9 +100,6 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         parsed.memoryPolicyStyle === "none"
       ) config.memoryPolicyStyle = parsed.memoryPolicyStyle;
       if (typeof parsed.memoryPolicyCustomText === "string") config.memoryPolicyCustomText = parsed.memoryPolicyCustomText;
-      if (typeof parsed.memoryCharLimit === "number") config.memoryCharLimit = parsed.memoryCharLimit;
-      if (typeof parsed.markdownMirror === "boolean") config.markdownMirror = parsed.markdownMirror;
-      if (typeof parsed.userCharLimit === "number") config.userCharLimit = parsed.userCharLimit;
       if (typeof parsed.nudgeInterval === "number") config.nudgeInterval = parsed.nudgeInterval;
       if (isNonNegativeNumber(parsed.reviewRecentMessages)) config.reviewRecentMessages = parsed.reviewRecentMessages;
       if (typeof parsed.reviewDeltaOnly === "boolean") config.reviewDeltaOnly = parsed.reviewDeltaOnly;
@@ -116,15 +109,6 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.flushOnShutdown === "boolean") config.flushOnShutdown = parsed.flushOnShutdown;
       if (typeof parsed.flushMinTurns === "number") config.flushMinTurns = parsed.flushMinTurns;
       if (isNonNegativeNumber(parsed.flushRecentMessages)) config.flushRecentMessages = parsed.flushRecentMessages;
-      if (typeof parsed.autoConsolidate === "boolean") {
-        config.autoConsolidate = parsed.autoConsolidate;
-        hasLegacyAutoConsolidate = true;
-      }
-      if (isMemoryOverflowStrategy(parsed.memoryOverflowStrategy)) {
-        config.memoryOverflowStrategy = parsed.memoryOverflowStrategy;
-        hasMemoryOverflowStrategy = true;
-      }
-      if (isNonNegativeNumber(parsed.overflowGraceMs)) config.overflowGraceMs = parsed.overflowGraceMs;
       if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
       if (isStringArray(parsed.correctionStrongPatterns)) config.correctionStrongPatterns = parsed.correctionStrongPatterns;
       if (isStringArray(parsed.correctionWeakPatterns)) config.correctionWeakPatterns = parsed.correctionWeakPatterns;
@@ -233,11 +217,6 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
           (parsed.childExtensionPaths as string[]).map((item) => item.trim()).filter(Boolean),
         )];
         if (childExtensionPaths.length > 0) config.childExtensionPaths = childExtensionPaths;
-      }
-      if (hasMemoryOverflowStrategy) {
-        config.autoConsolidate = config.memoryOverflowStrategy === "auto-consolidate";
-      } else if (hasLegacyAutoConsolidate) {
-        config.memoryOverflowStrategy = config.autoConsolidate ? "auto-consolidate" : "reject";
       }
       return config;
     }

@@ -23,11 +23,9 @@ describe("session project memory rebinding", () => {
       await fs.writeFile(
         path.join(agentRoot, "hermes-memory-config.json"),
         JSON.stringify({
-          memoryMode: "legacy-inject",
           reviewEnabled: false,
           flushOnCompact: false,
           flushOnShutdown: false,
-          autoConsolidate: false,
           correctionDetection: false,
           standingInstructionsEnabled: false,
         }),
@@ -40,10 +38,14 @@ describe("session project memory rebinding", () => {
         path.join(launchMemoryDir, "MEMORY.md"),
         "launch-directory memory",
       );
+      // Legacy Markdown decoys: memory lives in SQLite and the files are inert.
       await fs.writeFile(
         path.join(sessionMemoryDir, "MEMORY.md"),
         "active-session memory",
       );
+      const { DatabaseManager } = await import("../src/store/db.js");
+      const { getMemories } = await import("../src/store/sqlite-memory-store.js");
+      const dbManager = new DatabaseManager(path.join(agentRoot, "pi-hermes-memory"));
 
       process.env.PI_CODING_AGENT_DIR = agentRoot;
       process.chdir(launchDir);
@@ -81,7 +83,9 @@ describe("session project memory rebinding", () => {
       await resourcesDiscover({ cwd: targetDir, reason: "startup" }, sessionCtx);
 
       const result = await beforeAgentStart({ systemPrompt: "base" }, sessionCtx) as { systemPrompt: string };
-      assert.match(result.systemPrompt, /active-session memory/);
+      assert.match(result.systemPrompt, /memory-policy/);
+      // Markdown memory is never injected, from any project.
+      assert.doesNotMatch(result.systemPrompt, /active-session memory/);
       assert.doesNotMatch(result.systemPrompt, /launch-directory memory/);
 
       const writeResult = await mockPi.tools.memory_add.execute(
@@ -93,10 +97,15 @@ describe("session project memory rebinding", () => {
       );
       assert.equal(writeResult.details.success, true);
 
-      const sessionMemory = await fs.readFile(path.join(sessionMemoryDir, "MEMORY.md"), "utf-8");
-      const launchMemory = await fs.readFile(path.join(launchMemoryDir, "MEMORY.md"), "utf-8");
-      assert.match(sessionMemory, /session-cwd write/);
-      assert.doesNotMatch(launchMemory, /session-cwd write/);
+      const rows = getMemories(dbManager, { target: "memory" });
+      const written = rows.find((row) => row.content.includes("session-cwd write"));
+      assert.ok(written, "project write landed in SQLite");
+      assert.equal(written.project, path.basename(targetDir));
+
+      // The Markdown files stay exactly as they were.
+      assert.equal(await fs.readFile(path.join(sessionMemoryDir, "MEMORY.md"), "utf-8"), "active-session memory");
+      assert.equal(await fs.readFile(path.join(launchMemoryDir, "MEMORY.md"), "utf-8"), "launch-directory memory");
+      dbManager.close();
     } finally {
       process.chdir(previousCwd);
       if (previousAgentRoot === undefined) delete process.env.PI_CODING_AGENT_DIR;

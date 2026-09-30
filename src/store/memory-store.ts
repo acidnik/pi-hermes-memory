@@ -174,6 +174,11 @@ export class MemoryStore {
     else this.memoryEntries = entries;
   }
 
+  /**
+   * Legacy Markdown size budget. SQLite-only mode (the only mode reachable from
+   * config) never enforces it; the helpers stay for the unreachable
+   * legacy-inject file path.
+   */
   private charLimit(target: "memory" | "user" | "failure"): number {
     if (target === "failure") return this.config.memoryCharLimit * 2; // Failures get more space
     return target === "user" ? this.config.userCharLimit : this.config.memoryCharLimit;
@@ -183,9 +188,9 @@ export class MemoryStore {
   }
 
   /**
-   * SQLite is the authoritative write/read target in the default policy-only
-   * mode. The Markdown files (when mirrored) are a derived human-readable
-   * export, never a write gate: no character cap, no auto-consolidation.
+   * SQLite is the only memory source/target. The Markdown files are legacy
+   * artifacts written before the SQLite-only switch: they are never read and
+   * never written in policy-only mode.
    */
   private get sqlitePrimary(): boolean {
     return this.config.memoryMode === "policy-only";
@@ -193,13 +198,16 @@ export class MemoryStore {
 
   /**
    * Whether the Markdown files are written as a mirror of the authoritative
-   * state. legacy-inject always mirrors because it injects memory into the
-   * system prompt from those files; policy-only defaults to mirroring
-   * (human-readable export) but can be disabled via `markdownMirror: false`.
+   * state. Only the unreachable legacy-inject mode mirrors; SQLite-only mode
+   * defaults to `markdownMirror: false` and the config key is no longer parsed,
+   * so memory tool calls never touch the files.
    */
   private get markdownMirrorEnabled(): boolean {
     if (this.config.memoryMode === "legacy-inject") return true;
-    return this.config.markdownMirror !== false;
+    // Fail-safe: only an explicit opt-in writes files. The config key is no
+    // longer parsed, so this is unreachable in production — a partially
+    // specified config must never start writing Markdown memory.
+    return this.config.markdownMirror === true;
   }
 
   private charCount(target: "memory" | "user" | "failure"): number {
@@ -231,18 +239,19 @@ export class MemoryStore {
   async loadFromDisk(): Promise<void> {
     await fs.mkdir(this.memoryDir, { recursive: true });
 
-    if (this.sqlitePrimary && this.sqliteScopeLoader) {
-      // SQLite is the source of truth: load the authoritative scope instead of
-      // the Markdown mirror (which may be disabled or stale). Falls back to the
-      // Markdown files when SQLite cannot be read.
-      try {
-        for (const target of ["memory", "user", "failure"] as const) {
-          const entries = await this.sqliteScopeLoader(target);
-          this.setEntries(target, [...new Set(entries)]);
-        }
-      } catch (error) {
-        console.warn(`⚠️ SQLite scope load failed, falling back to Markdown: ${error instanceof Error ? error.message : String(error)}`);
-        await this.loadMarkdownScopes();
+    if (this.sqlitePrimary) {
+      // SQLite is the ONLY memory source. The Markdown files are legacy
+      // artifacts: they are never read (a stale file must not resurrect or
+      // delete rows), so a missing scope loader is a hard error, not a reason
+      // to fall back to them.
+      if (!this.sqliteScopeLoader) {
+        throw new Error(
+          "Memory init failed: SQLite scope loader is not configured and Markdown files are no longer read.",
+        );
+      }
+      for (const target of ["memory", "user", "failure"] as const) {
+        const entries = await this.sqliteScopeLoader(target);
+        this.setEntries(target, [...new Set(entries)]);
       }
     } else {
       await this.loadMarkdownScopes();
