@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Readable tool feedback for memory and skill writes**: the tool cards for `memory_add` / `memory_replace` / `memory_remove` and `skill_manage` no longer expand to the raw JSON payload. Collapsed, a memory write shows the outcome, the target (plus category for failures), the keywords the entry was saved with (`Saved · target: user · keys: deploy, деплой · 26 entries`) and the store size; a skill card shows the outcome plus the skill id (`Created · project:app:deploy-pi-package`). Expanded, a memory card shows the entry text that was written, the text a replace replaced (`was:`) or a remove deleted (`removed:`), rotated-out entries and warnings; a skill card shows the message, `skill_id`, `scope`, `section`, `path` and the markdown body that was written, and listing skills renders the index as `id — description` lines instead of JSON. The extra context lives in the tool `details`, so the model-facing payload stays terse — an added or replaced entry is never echoed back to the model.
+
 ### Removed
 
 - **Markdown memory files are gone — memory is SQLite-only**: `MEMORY.md`, `USER.md`, `failures.md` and `projects-memory/<project>/MEMORY.md` are no longer read or written. Everything lives in the FTS5-searchable `memories` table in `sessions.db`, with **no size budget**: a write can no longer fail because memory is "full", and nothing is evicted or automatically consolidated to make room. The config keys `memoryMode`, `markdownMirror`, `memoryCharLimit`, `userCharLimit`, `projectCharLimit`, `memoryOverflowStrategy`, `autoConsolidate` and `overflowGraceMs` are retired — they are accepted and ignored. `/memory-sync-markdown` is gone; manual `/memory-consolidate` remains for deduplication. Existing files stay on disk as inert backups and are never touched again, so entries that exist **only** in those files are no longer returned by `memory_search`.

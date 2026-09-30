@@ -277,6 +277,102 @@ describe("shared tool-result view", () => {
 });
 
 describe("tool-specific summaries", () => {
+  it("keeps search/session expanded text unchanged", () => {
+    const searchText = "Found 3 memories matching auth:\n\nfirst\nsecond\nthird";
+    const search = searchResultView(result(searchText, { success: true, count: 3 }));
+    assert.match(search.summary, /3/);
+    assert.equal(search.expandedText, searchText);
+  });
+
+  it("shows target and keywords collapsed, and the written entry expanded", () => {
+    const details = {
+      success: true,
+      message: "Entry added.",
+      target: "user",
+      entry_count: 26,
+      entry: "Standing release contract for pi-better-paste-markers.",
+      keywords: ["deploy", "деплой", "publish"],
+    };
+    const toolResult = result(JSON.stringify({ ...details, entry: undefined, keywords: undefined }), details);
+    const view = memoryResultView(toolResult);
+
+    assert.equal(view.summary, "Saved · target: user · keys: deploy, деплой, publish · 26 entries");
+    assert.equal(
+      view.expandedText,
+      [
+        "Entry added.",
+        "target: user · scope=global · 26 entries",
+        "keys: deploy, деплой, publish",
+        "",
+        "Standing release contract for pi-better-paste-markers.",
+      ].join("\n"),
+    );
+  });
+
+  it("marks an add without keywords as such and shows project scope", () => {
+    const details = {
+      success: true,
+      message: "Entry added.",
+      target: "project",
+      project: "pi-hermes-memory",
+      entry_count: 7,
+      entry: "niri IPC facts",
+      keywords: [] as string[],
+    };
+    const view = memoryResultView(result(JSON.stringify({ success: true }), details));
+
+    assert.equal(view.summary, "Saved · target: project · keys: (none) · 7 entries");
+    assert.match(view.expandedText, /target: project · scope=project:pi-hermes-memory · 7 entries/);
+    assert.match(view.expandedText, /keys: \(none\)\n\nniri IPC facts/);
+  });
+
+  it("shows the previous text on replace and the deleted text on remove", () => {
+    const replaced = memoryResultView(result(JSON.stringify({ success: true }), {
+      success: true,
+      message: "Entry replaced.",
+      target: "memory",
+      entry_count: 3,
+      entry: "new text about SQLite",
+      previous_entry: "old text about Markdown",
+      keywords: ["sqlite"],
+    }));
+    assert.equal(replaced.summary, "Replaced · target: memory · keys: sqlite · 3 entries");
+    assert.match(replaced.expandedText, /new text about SQLite\n\nwas:\nold text about Markdown/);
+
+    const removed = memoryResultView(result(JSON.stringify({ success: true }), {
+      success: true,
+      message: "Entry removed.",
+      target: "memory",
+      entry_count: 2,
+      removed_entry: "text that went away",
+    }));
+    assert.equal(removed.summary, "Removed · target: memory · 2 entries");
+    assert.match(removed.expandedText, /target: memory · scope=global · 2 entries\n\nremoved:\ntext that went away/);
+  });
+
+  it("renders failures with the hint and the matching entries", () => {
+    const view = memoryResultView(result(JSON.stringify({ success: false }), {
+      success: false,
+      error: "No entry matched 'use pnpm'.",
+      target: "memory",
+      matching_targets: ["failure"],
+      matches: ["[correction] use pnpm for lockfiles"],
+    }));
+    assert.equal(view.status, "failure");
+    assert.equal(view.summary, "Error · No entry matched 'use pnpm'.");
+    assert.equal(
+      view.expandedText,
+      [
+        "Error: No entry matched 'use pnpm'.",
+        "target: memory",
+        "other targets with a match: failure",
+        "",
+        "Matching entries:",
+        "  [correction] use pnpm for lockfiles",
+      ].join("\n"),
+    );
+  });
+
   it("summarizes memory, search/session, and skill results without changing expanded text", () => {
     const memoryText = JSON.stringify({
       success: true,
@@ -289,7 +385,7 @@ describe("tool-specific summaries", () => {
     assert.match(memory.summary, /Saved/);
     assert.match(memory.summary, /target: failure/);
     assert.match(memory.summary, /category: tool-quirk/);
-    assert.equal(memory.expandedText, memoryText);
+    assert.notEqual(memory.expandedText, memoryText, "memory results get a human-readable expansion");
 
     const searchText = "Found 3 memories matching auth:\n\nfirst\nsecond\nthird";
     const search = searchResultView(result(searchText, { success: true, count: 3 }));
@@ -299,7 +395,53 @@ describe("tool-specific summaries", () => {
     const skillText = JSON.stringify({ success: true, skillId: "global:deploy", name: "deploy" });
     const skill = skillResultView(result(skillText, JSON.parse(skillText)));
     assert.match(skill.summary, /deploy/i);
-    assert.equal(skill.expandedText, skillText);
+    assert.equal(skill.expandedText, "skill_id: global:deploy");
+  });
+
+  it("shows the saved body and section for skill writes", () => {
+    const created = skillResultView(result("{}", {
+      success: true,
+      message: "Skill 'deploy-pi-package' created.",
+      skillId: "project:app:deploy-pi-package",
+      scope: "project",
+      path: "/tmp/skills/deploy-pi-package/SKILL.md",
+      body: "## When to Use\n\nRelease it.",
+    }));
+    assert.equal(created.summary, "Created · project:app:deploy-pi-package");
+    assert.equal(created.expandedText, [
+      "Skill 'deploy-pi-package' created.",
+      "skill_id: project:app:deploy-pi-package · scope: project · path: /tmp/skills/deploy-pi-package/SKILL.md",
+      "",
+      "## When to Use\n\nRelease it.",
+    ].join("\n"));
+
+    const patched = skillResultView(result("{}", {
+      success: true,
+      message: "Skill 'deploy-pi-package' updated.",
+      skillId: "project:app:deploy-pi-package",
+      scope: "project",
+      section: "Procedure",
+      body: "1. Compare versions",
+    }));
+    assert.equal(patched.summary, "Updated · project:app:deploy-pi-package");
+    assert.match(patched.expandedText, /section: Procedure/);
+    assert.match(patched.expandedText, /1\. Compare versions/);
+  });
+
+  it("lists available skills instead of dumping JSON", () => {
+    const listed = skillResultView(result("{}", {
+      success: true,
+      skills: [
+        { skillId: "global:deploy", description: "Release a package" },
+        { skillId: "project:app:fix-bug", description: "Debug it" },
+      ],
+    }));
+    assert.equal(listed.summary, "Skills: 2 available");
+    assert.equal(listed.expandedText, [
+      "2 skills available",
+      "  global:deploy — Release a package",
+      "  project:app:fix-bug — Debug it",
+    ].join("\n"));
   });
 
   it("renders a real skill-tool JSON failure as an actionable failure", () => {
@@ -310,7 +452,7 @@ describe("tool-specific summaries", () => {
 
     assert.equal(skill.status, "failure");
     assert.equal(skill.summary, `Error · ${error}`);
-    assert.equal(skill.expandedText, skillText);
+    assert.equal(skill.expandedText, `Error: ${error}`);
     assert.match(renderPlain(
       createSharedToolResultRenderer(skillResultView)(
         toolResult,
@@ -340,7 +482,12 @@ describe("tool-specific summaries", () => {
       "Saved · target: failure · category: tool-quirk · 16 entries",
     );
     assert.doesNotMatch(view.summary, /^failure:/);
-    assert.equal(view.expandedText, fullText);
+    // No entry/keywords in the payload -> the expansion is the producer message
+    // plus the readable header (never the raw JSON).
+    assert.equal(
+      view.expandedText,
+      "Failure memory saved: tool-quirk\ntarget: failure · scope=global · category: tool-quirk · 16 entries",
+    );
     assert.deepEqual(toolResult, before);
 
     const collapsed = renderPlain(

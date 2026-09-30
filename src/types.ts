@@ -208,6 +208,22 @@ export interface MemoryResult {
   evicted_entries?: string[];
   evicted_count?: number;
   matches?: string[];
+  /**
+   * Display-only fields for the tool renderer. They are STRIPPED from the
+   * model-facing tool payload (see MEMORY_TOOL_DISPLAY_FIELDS in
+   * tools/memory-tool.ts) so the transcript can show what was written without
+   * paying tokens for text the model already sent.
+   */
+  /** Entry text that was added / now stored / replaced (the new text). */
+  entry?: string;
+  /** Full text of the entry that a replace replaced. */
+  previous_entry?: string;
+  /** Full text of the entry that a remove deleted. */
+  removed_entry?: string;
+  /** Searchable keywords carried by the affected entry. */
+  keywords?: string[];
+  /** Active project name for project-scoped writes. */
+  project?: string;
   /** Targets that contain old_text when a replace/remove was sent to the wrong one. */
   matching_targets?: Array<"memory" | "user" | "failure" | "project">;
 }

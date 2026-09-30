@@ -79,6 +79,45 @@ describe("registerMemoryTool", () => {
     assert.strictEqual(result.details.success, true, "details should mirror result");
   });
 
+  it("keeps display-only fields out of the model-facing payload", async () => {
+    let capturedResult: any;
+    const mockPi = {
+      registerTool: (def: any) => {
+        if (!capturedResult || def.name === "memory_add") capturedResult = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    const mockStore = {
+      add: () => ({
+        success: true,
+        target: "user",
+        entry_count: 3,
+        message: "Entry added.",
+        // Display-only context from MemoryStore: rendered, never sent to the model.
+        entry: "the saved text",
+        previous_entry: "replaced text",
+        removed_entry: "removed text",
+        keywords: ["deploy", "деплой"],
+        project: "pi-hermes-memory",
+      }),
+    } as unknown as MemoryStore;
+
+    registerMemoryTool(mockPi, mockStore, null, dbManager);
+    const result = await capturedResult.execute(
+      "tc-1",
+      { action: "add", target: "user", content: "the saved text" },
+      undefined as any, undefined as any, undefined as any,
+    );
+
+    const parsed = JSON.parse(result.content[0].text);
+    for (const field of ["entry", "previous_entry", "removed_entry", "keywords", "project"]) {
+      assert.strictEqual(field in parsed, false, `${field} must not reach the model`);
+      assert.strictEqual(field in result.details, true, `${field} stays available for the renderer`);
+    }
+    assert.deepStrictEqual(result.details.keywords, ["deploy", "деплой"]);
+    assert.strictEqual(result.details.entry, "the saved text");
+  });
+
   it("execute add with FIFO evictions returns normal text with full rotated entries", async () => {
     let capturedResult: any;
 

@@ -163,6 +163,10 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
       };
 
       let result;
+      // Display-only context for the tool renderer: what was actually written
+      // (section + markdown body). It lives in `details`, never in the
+      // model-facing JSON payload.
+      let display: Record<string, unknown> = {};
       switch (action) {
         case "create":
           if (!name) {
@@ -191,6 +195,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
             };
           }
           result = await store.create(name, description, createBodyResult.body, scope);
+          display = { scope, body: createBodyResult.body };
           break;
 
         case "view":
@@ -276,6 +281,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
           }
 
           result = await store.patch(skill_id, section, patchContent);
+          display = { skillId: skill_id, section, body: patchContent };
           break;
         }
 
@@ -304,6 +310,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
             };
           }
           result = await store.edit(skill_id, nextDescription, nextBody);
+          display = { skillId: skill_id, description: nextDescription || undefined, body: nextBody };
           break;
         }
 
@@ -326,7 +333,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
 
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
-        details: result,
+        details: { ...(typeof result === "object" && result !== null ? result : {}), ...display },
       };
     },
   });

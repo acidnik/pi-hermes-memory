@@ -29,6 +29,19 @@ import { normalizeMemoryLookupText } from "../store/memory-lookup.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { memoryResultView } from "./tool-result-views.js";
 
+/**
+ * Fields that exist only for the tool renderer (what was written, its keywords,
+ * the replaced/removed text). They are dropped from the model-facing payload so
+ * the transcript can show them without duplicating tens of tokens per write.
+ */
+const MEMORY_TOOL_DISPLAY_FIELDS = [
+  "entry",
+  "previous_entry",
+  "removed_entry",
+  "keywords",
+  "project",
+] as const satisfies readonly (keyof MemoryResult)[];
+
 function appendSyncWarning(result: MemoryResult, warning: string): MemoryResult {
   const warnings = [...(((result as any).warnings ?? []) as string[]), warning];
   const message = result.message ? `${result.message} Warning: ${warning}` : warning;
@@ -41,6 +54,8 @@ function appendSyncWarning(result: MemoryResult, warning: string): MemoryResult 
 }
 
 function formatMemoryToolText(result: MemoryResult): string {
+  const modelFacing: Record<string, unknown> = { ...result };
+  for (const field of MEMORY_TOOL_DISPLAY_FIELDS) delete modelFacing[field];
   const evictedEntries = result.evicted_entries ?? [];
   if (result.success && evictedEntries.length > 0) {
     const lines = [
@@ -59,7 +74,7 @@ function formatMemoryToolText(result: MemoryResult): string {
     return lines.join("\n").trim();
   }
 
-  return JSON.stringify(result);
+  return JSON.stringify(modelFacing);
 }
 
 function sqliteProjectFor(rawTarget: "memory" | "user" | "project" | "failure", projectName?: string | null): string | null | undefined {
@@ -475,7 +490,9 @@ export function registerMemoryTool(
     }
 
     if (syncWarning && result.success) result = appendSyncWarning(result, syncWarning);
-    if (rawTarget === "project" && result.success) result = { ...result, target: "project" };
+    if (rawTarget === "project" && result.success) {
+      result = { ...result, target: "project", project: activeProjectName || undefined };
+    }
 
     return {
       content: [{ type: "text" as const, text: formatMemoryToolText(result) }],

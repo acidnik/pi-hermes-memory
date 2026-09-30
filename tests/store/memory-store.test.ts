@@ -164,6 +164,29 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(raw.includes(`${TEST_MARKER} project uses pnpm`));
     });
 
+    it("reports display context for the renderer (entry text, keywords, replaced/removed text)", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      const added = await store.add("user", `${TEST_MARKER} deploy contract`, undefined, {
+        keywords: ["deploy", "деплой"],
+      });
+      assert.ok(added.success);
+      assert.equal(added.entry, `${TEST_MARKER} deploy contract`);
+      assert.deepStrictEqual(added.keywords, ["deploy", "деплой"]);
+
+      const replaced = await store.replace("user", `${TEST_MARKER} deploy contract`, `${TEST_MARKER} release contract`);
+      assert.ok(replaced.success);
+      assert.equal(replaced.entry, `${TEST_MARKER} release contract`);
+      assert.equal(replaced.previous_entry, `${TEST_MARKER} deploy contract`);
+      assert.deepStrictEqual(replaced.keywords, ["deploy", "деплой"], "replacement keeps the entry keywords");
+
+      const removed = await store.remove("user", `${TEST_MARKER} release contract`);
+      assert.ok(removed.success);
+      assert.equal(removed.removed_entry, `${TEST_MARKER} release contract`);
+      assert.deepStrictEqual(removed.keywords, ["deploy", "деплой"]);
+    });
+
     it("no-ops on duplicate entry and returns message", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();

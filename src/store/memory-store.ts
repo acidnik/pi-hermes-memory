@@ -355,7 +355,10 @@ export class MemoryStore {
         && (target !== "failure" || decoded.project === normalizedProject);
     });
     if (duplicate) {
-      return this.successResponse(target, "Entry already exists (no duplicate added).");
+      return {
+        ...this.successResponse(target, "Entry already exists (no duplicate added)."),
+        ...this.displayContext(content, keywords, project),
+      };
     }
 
     // Encode metadata: both dates = today
@@ -381,7 +384,26 @@ export class MemoryStore {
     await this.persist(target);
     markMutation();
     this.pendingInjected.push({ target, raw: encoded, project });
-    return this.successResponse(target, addedMessage);
+    return {
+      ...this.successResponse(target, addedMessage),
+      ...this.displayContext(content, keywords, project),
+    };
+  }
+
+  /**
+   * Display-only context for the tool renderer (entry text, keywords, project
+   * scope). The memory tool strips these fields from the model-facing payload.
+   */
+  private displayContext(
+    content: string,
+    keywords?: string[],
+    project?: string,
+  ): Pick<MemoryResult, "entry" | "keywords" | "project"> {
+    return {
+      entry: content,
+      keywords: keywords && keywords.length > 0 ? keywords : undefined,
+      project: project?.trim() || undefined,
+    };
   }
 
   private async addWithConsolidation(
@@ -643,7 +665,16 @@ export class MemoryStore {
     await this.persist(target);
     markMutation();
     for (const entry of replacements.values()) this.pendingInjected.push({ target, raw: entry });
-    return this.successResponse(target, "Entry replaced.");
+    const previousEntry = matches.map((entry) => this.stripMetadata(entry)).join("\n");
+    const previousDecoded = matches.length === 1 ? this.decodeEntry(matches[0]) : undefined;
+    return {
+      ...this.successResponse(target, "Entry replaced."),
+      // Display-only context (stripped from the model-facing tool payload).
+      entry: newContent,
+      previous_entry: previousEntry,
+      keywords: previousDecoded?.keywords ?? undefined,
+      project: previousDecoded?.project ?? undefined,
+    };
   }
 
   async remove(target: "memory" | "user" | "failure", oldText: string, signal?: AbortSignal): Promise<MemoryResult> {
@@ -680,7 +711,14 @@ export class MemoryStore {
     await this.persist(target);
     markMutation();
 
-    return this.successResponse(target, "Entry removed.");
+    const removedDecoded = matches.length === 1 ? this.decodeEntry(matches[0]) : undefined;
+    return {
+      ...this.successResponse(target, "Entry removed."),
+      // Display-only context (stripped from the model-facing tool payload).
+      removed_entry: matches.map((entry) => this.stripMetadata(entry)).join("\n"),
+      keywords: removedDecoded?.keywords ?? undefined,
+      project: removedDecoded?.project ?? undefined,
+    };
   }
 
   // ─── System prompt injection (frozen snapshot) ───
