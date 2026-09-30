@@ -178,7 +178,8 @@ export interface MemoryConfig {
   /** Log failed auto-consolidation attempts to the session console. Default: true */
   autoConsolidationWarnOnFailure: boolean;
   /** Inject pinned STANDING.md instructions into every session. Default: true */
-  standingInstructionsEnabled: boolean;
+  /** RETIRED — always-injected entries are `important` rows now. Not parsed. */
+  standingInstructionsEnabled?: boolean;
   /**
    * Session retention window in days. A positive value opts in to pruning
    * sessions (and their messages) older than the window on startup; `0`/omitted
@@ -222,6 +223,8 @@ export interface MemoryResult {
   removed_entry?: string;
   /** Searchable keywords carried by the affected entry. */
   keywords?: string[];
+  /** The entry is flagged always-injected ("important"). */
+  important?: boolean;
   /** Active project name for project-scoped writes. */
   project?: string;
   /** Targets that contain old_text when a replace/remove was sent to the wrong one. */

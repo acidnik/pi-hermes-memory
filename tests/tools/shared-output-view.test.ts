@@ -350,6 +350,34 @@ describe("tool-specific summaries", () => {
     assert.match(removed.expandedText, /target: memory · scope=global · 2 entries\n\nremoved:\ntext that went away/);
   });
 
+  it("makes an always-injected write loud, and a demotion visible", () => {
+    const promoted = memoryResultView(result(JSON.stringify({ success: true }), {
+      success: true,
+      message: "Entry added.",
+      target: "memory",
+      entry_count: 4,
+      entry: "critical rule",
+      keywords: ["critical"],
+      important: true,
+    }));
+    assert.equal(promoted.summary, "Saved · target: memory · ❗important · keys: critical · 4 entries");
+    assert.match(promoted.expandedText, /❗ ALWAYS-INJECTED — this entry is injected at the start of every session\./);
+    assert.match(promoted.expandedText, /target: memory · scope=global · always-injected · 4 entries/);
+
+    const demoted = memoryResultView(result(JSON.stringify({ success: true }), {
+      success: true,
+      message: "Entry updated.",
+      target: "memory",
+      entry_count: 4,
+      entry: "critical rule",
+      previous_entry: "critical rule",
+      keywords: ["critical"],
+      important: false,
+    }));
+    assert.equal(demoted.summary, "Updated · target: memory · important removed · keys: critical · 4 entries");
+    assert.match(demoted.expandedText, /No longer always-injected — back to keyword retrieval\./);
+  });
+
   it("renders a keyword-only re-tag without echoing the unchanged text", () => {
     const view = memoryResultView(result(JSON.stringify({ success: true }), {
       success: true,

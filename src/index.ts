@@ -49,9 +49,12 @@ import { registerIndexSessionsCommand } from "./handlers/index-sessions.js";
 import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
 import { setupAutoRetrieve, pruneAutoRetrievalRows } from "./handlers/auto-retrieve.js";
 import { setupBashRetrieve } from "./handlers/bash-retrieve.js";
+import {
+  migrateStandingInstructions,
+  registerMemoryPinCommand,
+  setupImportantMemory,
+} from "./handlers/important-memory.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
-import { registerStandingPinCommand } from "./handlers/standing-pin.js";
-import { StandingInstructions } from "./store/standing-instructions.js";
 import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
 import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
@@ -190,12 +193,6 @@ export default function (pi: ExtensionAPI) {
     }
     await projectLoad;
   };
-  // Never written by review, consolidation or the correction detector — see
-  // store/standing-instructions.ts for why provenance has to be structural.
-  const standingStore = config.standingInstructionsEnabled !== false
-    ? new StandingInstructions(path.join(globalDir, STANDING_FILE), undefined, undefined,
-        shouldMigrateExtensionRoot ? path.join(legacyGlobalDir, STANDING_FILE) : undefined)
-    : null;
 
   const initialization = createMemoryInitializer(async () => {
     const timingPrefix = lazy ? "memory-init" : "session-start";
@@ -213,7 +210,14 @@ export default function (pi: ExtensionAPI) {
               throw new Error(`sessions.db migration failed: ${sessionsFailure.message}`);
             }
           }
+          // The root migration is done: SQLite may open from here on.
           databaseMigrationPending = false;
+          // One-time: fold the retired Standing instructions file into the
+          // SQLite always-injected pool (idempotent, leaves the file alone).
+          await migrateStandingInstructions(dbManager, [
+            path.join(globalDir, STANDING_FILE),
+            shouldMigrateExtensionRoot ? path.join(legacyGlobalDir, STANDING_FILE) : null,
+          ]);
         });
         persistenceInitialized = true;
       } catch (error) {
@@ -289,8 +293,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
     if (typeof ctx.sessionManager?.getSessionId === "function") setCurrentSessionId(ctx.sessionManager.getSessionId());
-    // Pinned directives must not depend on migration/SQLite being healthy.
-    if (standingStore) await standingStore.load();
     if (!lazy) await ensureMemoryReady(ctx);
     refreshSkillProjectContext(ctx.cwd);
     await skillStore.migrateLegacySkills();
@@ -301,7 +303,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
-    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
+    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef());
 
     if (promptContext) {
       return {
@@ -371,8 +373,8 @@ export default function (pi: ExtensionAPI) {
   registerInterviewCommand(memoryPi, store);
   registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);
-  registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectNameRef, config, standingStore);
-  if (standingStore) registerStandingPinCommand(pi, standingStore);
+  registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectNameRef, config);
+  registerMemoryPinCommand(pi, dbManager);
 
   // ── 10. Live session indexing ──
   pi.on("message_end", async (_event, ctx) => {
@@ -399,6 +401,14 @@ export default function (pi: ExtensionAPI) {
   // Memory retrieval on bash tool calls (opt-in, off by default): append the
   // top memory matches for a command's terms right after the tool output.
   setupBashRetrieve(pi, config, {
+    dbManager,
+    isReady: lazy ? () => initialization.isReady() : undefined,
+    bindProjectFromCwd,
+    resolveProjectName: projectNameRef,
+  });
+  // Always-injected ("important") entries: one block at the start of a session,
+  // appended at the tail of the context and hidden from the transcript.
+  setupImportantMemory(pi, {
     dbManager,
     isReady: lazy ? () => initialization.isReady() : undefined,
     bindProjectFromCwd,

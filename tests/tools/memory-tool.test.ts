@@ -10,7 +10,7 @@ import { registerMemoryTool } from "../../src/tools/memory-tool.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, searchMemories, syncMemoryEntry } from "../../src/store/sqlite-memory-store.js";
-import { ENTRY_DELIMITER, MEMORY_FILE } from "../../src/constants.js";
+import { ENTRY_DELIMITER, IMPORTANT_POOL_WARN_ENTRIES, MEMORY_FILE } from "../../src/constants.js";
 import { Value } from "typebox/value";
 import { memoryResultView } from "../../src/tools/tool-result-views.js";
 
@@ -873,9 +873,97 @@ describe("registerMemoryTool", () => {
 
     assert.deepStrictEqual(
       replaceArgs,
-      ["memory", "old", "new", undefined, { keywords: undefined }],
+      ["memory", "old", "new", undefined, { keywords: undefined, important: undefined }],
       "should pass target, old_text, content (and keywords) to store.replace",
     );
+  });
+
+  describe("always-injected (important) writes", () => {
+    it("passes the flag through and keeps it out of the model payload", async () => {
+      let captured: any;
+      let addArgs: any;
+      const mockPi = {
+        registerTool: (def: any) => { if (!captured || def.name === "memory_add") captured = def; },
+      } as unknown as ExtensionAPI;
+      const mockStore = {
+        add: (...args: any[]) => {
+          addArgs = args;
+          return { success: true, target: "memory", entry_count: 1, message: "Entry added.", important: true };
+        },
+      } as unknown as MemoryStore;
+
+      registerMemoryTool(mockPi, mockStore, null, null);
+      const result = await captured.execute(
+        "tc-1",
+        { action: "add", target: "memory", content: "critical rule", keywords: ["critical"], important: true },
+        undefined, undefined, undefined,
+      );
+
+      assert.deepStrictEqual(addArgs[3], { keywords: ["critical"], important: true });
+      assert.strictEqual(result.details.important, true, "the renderer sees the flag");
+      const parsed = JSON.parse(result.content[0].text);
+      assert.strictEqual("important" in parsed, false, "the flag is display-only, not model-facing");
+    });
+
+    it("routes a demotion to a metadata-only patch", async () => {
+      let captured: any;
+      let patchArgs: any;
+      const mockPi = {
+        registerTool: (def: any) => { if (def.name === "memory_replace") captured = def; },
+      } as unknown as ExtensionAPI;
+      const mockStore = {
+        patchMetadata: (...args: any[]) => {
+          patchArgs = args;
+          return {
+            success: true,
+            target: "memory",
+            entry_count: 1,
+            message: "Entry updated.",
+            entry: "the fact",
+            previous_entry: "the fact",
+            keywords: ["k"],
+            important: false,
+          };
+        },
+      } as unknown as MemoryStore;
+
+      registerMemoryTool(mockPi, mockStore, null, null);
+      const result = await captured.execute(
+        "tc-1",
+        { target: "memory", old_text: "the fact", important: false },
+        undefined, undefined, undefined,
+      );
+
+      assert.deepStrictEqual(patchArgs, ["memory", "the fact", { keywords: undefined, important: false }]);
+      assert.strictEqual(result.details.important, false);
+      assert.strictEqual(result.details.success, true);
+    });
+
+    it("warns softly once the always-injected pool grows past the budget", async () => {
+      for (let index = 0; index <= IMPORTANT_POOL_WARN_ENTRIES; index++) {
+        syncMemoryEntry(dbManager, { content: `pinned fact ${index}`, target: "memory", important: true });
+      }
+
+      let captured: any;
+      const mockPi = {
+        registerTool: (def: any) => { if (!captured || def.name === "memory_add") captured = def; },
+      } as unknown as ExtensionAPI;
+      const mockStore = {
+        add: () => ({ success: true, target: "memory", entry_count: 1, message: "Entry added.", important: true }),
+      } as unknown as MemoryStore;
+
+      registerMemoryTool(mockPi, mockStore, null, dbManager);
+      const result = await captured.execute(
+        "tc-1",
+        { action: "add", target: "memory", content: "one more pinned fact", keywords: ["pinned"], important: true },
+        undefined, undefined, undefined,
+      );
+
+      assert.strictEqual(result.details.success, true, "the pool budget never blocks a write");
+      assert.match(result.details.warning, /^Important pool is large: /);
+      assert.match(result.details.warning, /Demote or remove what is no longer worth that cost/);
+      assert.match(result.details.warning, /Current pool \(5 of 16\):/);
+    });
   });
 
   it("re-tags without content when only keywords are given", async () => {
@@ -894,7 +982,7 @@ describe("registerMemoryTool", () => {
         replaceCalls++;
         return { success: true, target: "memory", entry_count: 1, message: "Entry replaced." };
       },
-      retag: (...args: any[]) => {
+      patchMetadata: (...args: any[]) => {
         retagArgs = args;
         return {
           success: true,
@@ -915,7 +1003,7 @@ describe("registerMemoryTool", () => {
       undefined as any, undefined as any, undefined as any,
     );
 
-    assert.deepStrictEqual(retagArgs, ["memory", "the fact", ["sqlite", "keys"]]);
+    assert.deepStrictEqual(retagArgs, ["memory", "the fact", { keywords: ["sqlite", "keys"], important: undefined }]);
     assert.strictEqual(replaceCalls, 0, "a keyword-only edit must not rewrite the entry text");
     assert.equal(retagged.details.success, true);
     assert.equal(retagged.details.warning, undefined, "re-tagged entries keep keywords, so no lint");

@@ -84,6 +84,14 @@ export const STANDING_FILE = "STANDING.md";
 export const STANDING_MAX_ENTRIES = 20;
 export const STANDING_MAX_CHARS = 2000;
 
+/**
+ * Soft budget for the always-injected pool (`important: true` entries).
+ * Nothing is rejected when it is exceeded — the tool card warns instead, and
+ * the pool is injected once per session in its own project scope.
+ */
+export const IMPORTANT_POOL_WARN_ENTRIES = 15;
+export const IMPORTANT_POOL_WARN_CHARS = 1500;
+
 // ─── Runtime memory policy prompt ───
 export const MEMORY_POLICY_PROMPT = `<memory-policy>
 Persistent memory is available through memory tools. Do not assume memory has already been loaded into the prompt.
@@ -101,6 +109,12 @@ Scope rule — classify by DOMAIN, not by the speech act:
 - target "user" is only for what stays true in EVERY project (identity, preferences, communication style, cross-project habits).
 - A mixed fact must be split: the cross-project rule goes to "user"/"memory", the concrete repo, package and command details go to "project".
 - Test before saving: "if I switched to another repository, would this still be true?" No -> "project".
+
+Always-injected entries (important: true):
+- Inject once at the START of every session, in the entry's own scope (global rows everywhere, project rows only in that project). Same role as AGENTS.md content.
+- Promote only facts that must be present in every session and that keywords cannot be trusted to surface (critical constraints, hard-to-name facts). Never for task- or project-specific details that belong to a single session.
+- It is a per-session context tax: promote sparingly, and demote the moment it stops being true — memory_replace with important: false (metadata-only, the text stays verbatim) or memory_remove.
+- memory_search with important: true lists the whole pool for curation; keep it small.
 
 Keywords — automatic retrieval matches ONLY them:
 - Before each user message and on bash tool calls the extension searches the keywords column only. An entry saved without keywords is never surfaced that way; memory_search can still find it by its content.
@@ -159,6 +173,8 @@ Memory write targets: user for preferences/profile; memory for global notes and 
 
 Keywords: automatic retrieval (before user messages and on bash tool calls) matches the keywords column ONLY, so an entry without keywords is never auto-retrieved (memory_search still finds it by content). Pass 3-8 specific keywords that should pull this entry — the terms the user or the agent would really use for this fact, plus synonyms, other languages (RU↔EN), inflections and the file, command, package or tool names involved; generic words are noise.
 
+Always-injected entries ("important"): flag a fact with important:true only when it must be present in EVERY session of its scope and keywords cannot be trusted to surface it — it costs context every session. Demote it (memory_replace with important:false, metadata-only) as soon as it stops being true; memory_search with important:true lists the whole pool.
+
 memory_search filters: target searches user/global/failure memories; project filters project-scoped memories; category filters categorized failure/lesson memories only.
 
 Use the skill_manage tool during normal work for reusable procedures. On create, scope is required: global for transferable workflows, project for repo-specific ones. Prefer structured fields for create/update/patch, patch for one section, and update for full rewrites. Skip one-off or overly narrow skills.
@@ -207,6 +223,11 @@ KEYWORDS -- they drive automatic retrieval:
 - Automatic retrieval (before a user message, on bash tool calls) matches the keywords column ONLY: an entry saved without keywords is never surfaced that way, though memory_search still matches its content.
 - A keyword is a word that should pull THIS entry when it later appears in a user prompt or a bash command — the terms the user or the agent would really use for this fact, specific rather than generic.
 - Pass 3-8 keywords: synonyms, other languages (RU<->EN), inflections, and the file, command, package or tool names involved. Generic words ("memory", "note", "fix") match everything and only add noise.
+
+ALWAYS-INJECTED ("important"):
+- important: true injects the entry at the START of every session in its own scope (global rows everywhere, project rows only in that project) instead of waiting for a keyword match — the same job AGENTS.md content does.
+- Promote only what must be present in every session and cannot be trusted to keywords (critical constraints, hard-to-name facts); never task-specific details, and not for facts that a good keyword set already retrieves. Every promoted entry is a context cost in every session.
+- Demote the moment it stops being true: memory_replace with important: false (metadata-only — the text stays verbatim) or memory_remove; memory_search with important: true lists the pool.
 
 TOOLS:
 - memory_add requires target and content; category and failure_reason are optional for failure memories.

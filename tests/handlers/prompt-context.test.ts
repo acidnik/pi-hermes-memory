@@ -129,55 +129,20 @@ describe("buildPromptContext", () => {
     assert.doesNotMatch(result, /<memory-policy>/);
   });
 
-  const standing = {
-    formatForSystemPrompt: () => "<standing-instructions>\n1. never run find /\n</standing-instructions>",
-  } as any;
+  it("never injects a standing block: always-injected entries use their own session block", async () => {
+    const policyOnly = await buildPromptContext({ memoryMode: "policy-only" }, store, projectStore, "demo");
+    assert.strictEqual(policyOnly, MEMORY_POLICY_PROMPT);
 
-  it("appends standing instructions after the policy in policy-only mode", async () => {
-    const result = await buildPromptContext(
-      { memoryMode: "policy-only" },
-      store,
-      projectStore,
-      "demo",
-      standing,
-    );
-
-    assert.ok(result.startsWith(MEMORY_POLICY_PROMPT), "the policy still leads");
-    assert.match(result, /<standing-instructions>/);
-    assert.match(result, /never run find \//);
-    assert.doesNotMatch(result, /MEMORY<\/memory-context>/, "stored memories stay out of policy-only");
-  });
-
-  it("injects standing instructions even when the policy style is none", async () => {
-    const result = await buildPromptContext(
+    const noPolicy = await buildPromptContext(
       { memoryMode: "policy-only", memoryPolicyStyle: "none" },
       store,
       projectStore,
       "demo",
-      standing,
     );
+    assert.strictEqual(noPolicy, "");
 
-    assert.strictEqual(result, "<standing-instructions>\n1. never run find /\n</standing-instructions>");
-  });
-
-  it("puts standing instructions last in legacy-inject mode", async () => {
-    const result = await buildPromptContext(
-      { memoryMode: "legacy-inject" },
-      store,
-      projectStore,
-      "demo",
-      standing,
-    );
-
-    assert.ok(
-      result.indexOf("<standing-instructions>") > result.indexOf("PROJECT demo"),
-      "user directives read last, closest to the task",
-    );
-  });
-
-  it("injects nothing extra when no standing store is wired", async () => {
-    const result = await buildPromptContext({ memoryMode: "policy-only" }, store, projectStore, "demo");
-
-    assert.strictEqual(result, MEMORY_POLICY_PROMPT);
+    const legacy = await buildPromptContext({ memoryMode: "legacy-inject" }, store, projectStore, "demo");
+    assert.doesNotMatch(legacy, /standing-instructions/);
+    assert.match(legacy, /MEMORY<\/memory-context>/);
   });
 });

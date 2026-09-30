@@ -211,29 +211,33 @@ System Prompt
 
 Set `"memoryPolicyStyle"` to `"full"`, `"compact"`, `"custom"`, or `"none"` to choose policy verbosity.
 
-## Standing Instructions
+## Always-Injected Memory (`important`)
 
-Recall is probabilistic. In `policy-only` mode a stored rule only takes effect if the agent decides to call `memory_search` **before** the action the rule would have prevented — and for a prohibition, that is exactly the moment it has no reason to look. Preferences survive a missed lookup; prohibitions do not.
+Recall is probabilistic. In `policy-only` mode a stored fact only takes effect if the agent decides to search memory **before** the action it would have changed — and for a prohibition, that is exactly the moment it has no reason to look. Some facts must simply be present, like AGENTS.md content.
 
-Standing instructions are the answer to that: a small, user-authored file that is injected into **every** session, in every memory mode.
+`important: true` marks such an entry: it is injected at the **start of every session**, in the entry's own scope (global entries everywhere, project-scoped entries only in that project). `memory_add` and `memory_replace` accept the flag; `/memory-pin` is the user-facing view of the same pool:
 
 ```
 /memory-pin never run find / or other root-wide filesystem searches
-/memory-pin                     # list what is pinned and how much budget is left
-/memory-pin remove 2            # drop one
-/memory-pin clear               # drop all
+/memory-pin                     # list the pool (numbered)
+/memory-pin remove 2            # unpin one
+/memory-pin clear               # unpin everything
 ```
 
-They land in a `<standing-instructions>` block placed after the memory policy, so they read as a direct user directive rather than as recalled context.
+How it behaves:
 
 | Property | Behavior |
 |---|---|
-| **Provenance** | Stored in `~/.pi/agent/pi-hermes-memory/STANDING.md`. Background review, consolidation, and the correction detector never write there — only your editor or `/memory-pin` can. The agent cannot promote its own memory into this block. |
-| **Budget** | Hard cap of 20 entries / 2,000 characters — independent of the memory store, which has no size budget. `/memory-pin` refuses a write past the cap; a hand-edited file over the cap is truncated at injection and the omission is stated loudly inside the block. |
-| **Safety** | Every pin goes through the same `scanContent()` injection/exfiltration scan as any memory write, and the block is fenced. |
-| **Disabling** | Set `"standingInstructionsEnabled": false` to drop the store and the command entirely. |
+| **Delivery** | One block per session, appended as the **last** block of the first turn (`<important-memory>`, hidden from the transcript). Tail placement keeps the prefix cache intact even if the pool changes mid-session — an agent promotion therefore lands in the *next* session. |
+| **Scope** | Global (`project IS NULL`) rows plus the **active project's** rows, exactly like retrieval: another project's always-injected facts never leak in. |
+| **Dedup** | The same retrieved-memories table as auto-retrieve: once per session, re-injected after a context compaction, not re-sent on a resume. |
+| **Budget** | **Soft.** Nothing is rejected; the tool card warns when the pool grows past ~15 entries / 1500 chars, listing the first few, and `/memory-pin` shows the size. Every entry is a context tax in every session. |
+| **Visibility** | A promotion is loud in the card (`Saved · target: memory · ❗important · …` plus an `❗ ALWAYS-INJECTED …` line when expanded); a demotion reads `important removed`. `memory_search({ important: true })` lists the whole pool. |
+| **Demoting** | `memory_replace` with `old_text` + `important: false` and **no** `content` — metadata-only, the text stays verbatim. |
+| **Safety** | Writes go through the same `scanContent()` injection/exfiltration scan as any memory entry. |
+| **Curating** | Keep the pool small and true: promote only what helps in **every** session and cannot be retrieved by keywords; demote the moment it stops being true. |
 
-Run `/memory-preview-context` to see exactly what is injected.
+Run `/memory-preview-context` to inspect the injected policy; the retired `STANDING.md` file is folded into this pool once on startup and then left untouched.
 
 This is deliberately *not* tool enforcement. If you need a hard block on a dangerous command rather than a reliable instruction, add a `tool_call` guard — that is a different feature with a different failure mode.
 
@@ -464,6 +468,7 @@ This means skills build up naturally over time without you having to ask.
 | `/memory-insights` | Shows everything stored in memory and user profile |
 | `/memory-skills` | Opens an interactive skills manager for search, multi-select, move, and delete |
 | `/memory-consolidate` | Manually trigger memory consolidation (merge/deduplicate entries) |
+| `/memory-pin` | Pin a fact into the always-injected pool (list / add / remove / clear) |
 | `/memory-interview` | Answer a few questions to pre-fill your user profile |
 | `/memory-switch-project` | List all project memories and their entry counts |
 | `/memory-index-sessions` | Import past Pi sessions into the search database |
@@ -552,7 +557,6 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "flushOnShutdown": true,
   "flushMinTurns": 6,
   "flushRecentMessages": 0,
-  "standingInstructionsEnabled": true
 }
 ```
 
@@ -565,7 +569,6 @@ SQLite-only and has no character budget.
 | `lazyInitialization` | `false` | Opt in to first-use initialization. Defers ordinary memory loading, extension-root migration, maintenance and session indexing until a memory operation needs them. See below for lifecycle tradeoffs. |
 | `memoryPolicyStyle` | `full` | Policy text used in `policy-only` mode: `full` preserves the default v0.7 policy; `compact` uses shorter built-in guidance; `custom` uses `memoryPolicyCustomText`; `none` injects no policy text |
 | `memoryPolicyCustomText` | unset | Custom policy text used when `memoryPolicyStyle` is `custom`; blank or missing text falls back to `compact` |
-| `standingInstructionsEnabled` | `true` | Inject `STANDING.md` (pinned via `/memory-pin`) into every session, in every memory mode |
 | `memoryDir` | `~/.pi/agent/pi-hermes-memory` | Custom directory for extension storage files |
 | `projectsMemoryDir` | `projects-memory` | Subdirectory under `~/.pi/agent/` for project-scoped memory |
 | `sessionSearch` | `{ "variant": "legacy" }` | Session search implementation: `legacy` keeps the existing SQLite/FTS snippet search; `anchors` uses the opt-in Markdown request surface and returns compact JSONL line-range anchors from `~/.pi/agent/sessions/` |
@@ -618,10 +621,9 @@ callers share the load; a failed load can be retried by the next operation.
 
 Important boundaries:
 
-- Pinned `STANDING.md` instructions and skill discovery remain available at
-  startup. Pins in a legacy storage root are read independently of migration or
-  SQLite; the primary file, even if empty, takes precedence. `/memory-pin` writes
-  to the primary path without dropping the legacy instructions it loaded.
+- Always-injected (`important`) entries arrive once memory is initialized: with
+  lazy startup the block is delivered on the first turn after activation. Skill
+  discovery stays available regardless.
 - Automatic review, correction capture and flush retain their existing triggers;
   when a trigger fires, it initializes memory before reading or writing it.
   Lazy initialization does not disable automatic learning or its model costs.

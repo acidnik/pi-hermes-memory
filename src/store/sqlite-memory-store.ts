@@ -21,6 +21,7 @@ const MEMORY_SELECT_COLUMNS = `
   category,
   content,
   keywords,
+  important,
   failure_reason,
   tool_state,
   corrected_to,
@@ -56,6 +57,11 @@ export interface SqliteMemoryEntry {
   content: string;
   /** Search synonyms / equivalents / inflections, parsed from the keywords column. */
   keywords: string[] | null;
+  /**
+   * Always-injected entry: injected once at the start of every session (in the
+   * entry's own project scope) instead of waiting for a keyword match.
+   */
+  important: boolean;
   failureReason: string | null;
   toolState: string | null;
   correctedTo: string | null;
@@ -73,6 +79,11 @@ export interface SqliteMemorySyncInput {
   project?: string | null;
   category?: MemoryCategory | null;
   keywords?: string[] | null;
+  /**
+   * When present, the stored flag is written (true = always-injected).
+   * When omitted the existing value is preserved (legacy mirror syncs).
+   */
+  important?: boolean;
   failureReason?: string | null;
   toolState?: string | null;
   correctedTo?: string | null;
@@ -159,6 +170,7 @@ function mapRow(row: {
   category: string | null;
   content: string;
   keywords: string | null;
+  important: number | null;
   failure_reason: string | null;
   tool_state: string | null;
   corrected_to: string | null;
@@ -173,6 +185,7 @@ function mapRow(row: {
     category: row.category as MemoryCategory | null,
     content: row.content,
     keywords: parseKeywords(row.keywords),
+    important: Number(row.important ?? 0) === 1,
     failureReason: row.failure_reason,
     toolState: row.tool_state,
     correctedTo: row.corrected_to,
@@ -239,6 +252,7 @@ function getMemoryById(dbManager: DatabaseManager, id: number): SqliteMemoryEntr
     category: string | null;
     content: string;
     keywords: string | null;
+    important: number | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -284,7 +298,8 @@ export function formatMarkdownMemoryEntry(entry: SqliteMemoryEntry): string {
   const keysMetadata = entry.keywords && entry.keywords.length > 0
     ? `, keys=${entry.keywords.join(", ")}`
     : "";
-  return `${entry.content} <!-- created=${entry.created}, last=${entry.lastReferenced}${keysMetadata}${projectMetadata}${srcMetadata} -->`;
+  const importantMetadata = entry.important ? ", imp=1" : "";
+  return `${entry.content} <!-- created=${entry.created}, last=${entry.lastReferenced}${keysMetadata}${importantMetadata}${projectMetadata}${srcMetadata} -->`;
 }
 
 /**
@@ -320,6 +335,7 @@ export function loadMemoryScopeEntries(
     category: string | null;
     content: string;
     keywords: string | null;
+    important: number | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -329,12 +345,12 @@ export function loadMemoryScopeEntries(
   }>;
   return rows.map((row) => formatMarkdownMemoryEntry(mapRow(row)));
 }
-function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null; sourceSession: string | null } {
-  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*project64=([A-Za-z0-9_-]+))?(?:,\s*src=([A-Za-z0-9_-]+))?\s*-->\s*$/);
+function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null; important: boolean; sourceSession: string | null } {
+  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*(imp=1))?(?:,\s*project64=([A-Za-z0-9_-]+))?(?:,\s*src=([A-Za-z0-9_-]+))?\s*-->\s*$/);
   if (match) {
     let project: string | null = null;
-    if (match[5]) {
-      try { project = Buffer.from(match[5], 'base64url').toString('utf-8').trim() || null; } catch {}
+    if (match[6]) {
+      try { project = Buffer.from(match[6], 'base64url').toString('utf-8').trim() || null; } catch {}
     }
     const keywords = match[4]
       ? match[4].split(/,\s*/).map((item) => item.trim()).filter(Boolean)
@@ -345,7 +361,8 @@ function parseMetadataComment(raw: string): { text: string; created: string; las
       lastReferenced: match[3].trim(),
       project,
       keywords: keywords && keywords.length > 0 ? keywords : null,
-      sourceSession: match[6] ?? null,
+      important: match[5] === 'imp=1',
+      sourceSession: match[7] ?? null,
     };
   }
 
@@ -356,6 +373,7 @@ function parseMetadataComment(raw: string): { text: string; created: string; las
     lastReferenced: fallback,
     project: null,
     keywords: null,
+    important: false,
     sourceSession: null,
   };
 }
@@ -416,13 +434,14 @@ export function addMemory(
   lastReferenced = created,
   keywords: string[] | null = null,
   sourceSession: string | null = null,
+  important = false,
 ): SqliteMemoryEntry {
   const db = dbManager.getDb();
 
   const result = db.prepare(`
-    INSERT INTO memories (project, target, category, content, keywords, failure_reason, tool_state, corrected_to, created, last_referenced, source_session)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(project, target, category, content, serializeKeywords(keywords), failureReason, toolState, correctedTo, created, lastReferenced, sourceSession);
+    INSERT INTO memories (project, target, category, content, keywords, important, failure_reason, tool_state, corrected_to, created, last_referenced, source_session)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(project, target, category, content, serializeKeywords(keywords), important ? 1 : 0, failureReason, toolState, correctedTo, created, lastReferenced, sourceSession);
 
   return {
     id: Number(result.lastInsertRowid),
@@ -431,6 +450,7 @@ export function addMemory(
     category,
     content,
     keywords: keywords && keywords.length > 0 ? keywords : null,
+    important: important === true,
     failureReason,
     toolState,
     correctedTo,
@@ -472,12 +492,13 @@ export function parseMarkdownMemoryEntry(
   project: string | null = null,
 ): ParsedMarkdownMemoryEntry {
   const metadata = parseMetadataComment(rawEntry);
-  const { text, created, lastReferenced, keywords } = metadata;
+  const { text, created, lastReferenced, keywords, important } = metadata;
   const parsedProject = normalizeNullable(project);
 
   if (target !== 'failure') {
     return {
       content: text,
+      important,
       target,
       project: parsedProject,
       keywords,
@@ -518,6 +539,7 @@ export function parseMarkdownMemoryEntry(
     project: parsedProject,
     category,
     keywords,
+    important: metadata.important,
     failureReason,
     toolState,
     correctedTo,
@@ -566,6 +588,7 @@ export function syncMemoryEntry(
     category: string | null;
     content: string;
     keywords: string | null;
+    important: number | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -590,6 +613,7 @@ export function syncMemoryEntry(
         lastReferenced,
         keywords,
         input.sourceSession ?? null,
+        input.important === true,
       ),
     };
   }
@@ -606,14 +630,20 @@ export function syncMemoryEntry(
   // Provenance is write-once: a re-sync of the same content never overrides
   // the session that first produced the row.
   const updatedSourceSession = existing.source_session ?? input.sourceSession ?? null;
+  // The important flag is written only when the caller states it (a re-sync of
+  // an unchanged entry must not silently clear it).
+  const updatedImportant = input.important === undefined
+    ? existing.important
+    : (input.important ? 1 : 0);
 
   db.prepare(`
     UPDATE memories
-    SET category = ?, keywords = ?, failure_reason = ?, tool_state = ?, corrected_to = ?, created = ?, last_referenced = ?, source_session = ?
+    SET category = ?, keywords = ?, important = ?, failure_reason = ?, tool_state = ?, corrected_to = ?, created = ?, last_referenced = ?, source_session = ?
     WHERE id = ?
   `).run(
     updatedCategory,
     updatedKeywords,
+    updatedImportant,
     updatedFailureReason,
     updatedToolState,
     updatedCorrectedTo,
@@ -808,6 +838,7 @@ export function replaceSyncedMemories(
     category: string | null;
     content: string;
     keywords: string | null;
+    important: number | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -1032,6 +1063,7 @@ export function searchMemories(
         category: string | null;
         content: string;
         keywords: string | null;
+        important: number | null;
         failure_reason: string | null;
         tool_state: string | null;
         corrected_to: string | null;
@@ -1080,6 +1112,7 @@ export function searchMemories(
       category: string | null;
       content: string;
       keywords: string | null;
+      important: number | null;
       failure_reason: string | null;
       tool_state: string | null;
       corrected_to: string | null;
@@ -1129,6 +1162,7 @@ export function searchMemories(
       category: string | null;
       content: string;
       keywords: string | null;
+      important: number | null;
       failure_reason: string | null;
       tool_state: string | null;
       corrected_to: string | null;
@@ -1266,6 +1300,7 @@ export function getMemories(
     category: string | null;
     content: string;
     keywords: string | null;
+    important: number | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;
@@ -1275,6 +1310,63 @@ export function getMemories(
   }>;
 
   return rows.map(mapRow);
+}
+
+/**
+ * Always-injected entries ("important"): injected once at the start of every
+ * session instead of waiting for a keyword match. Scope follows retrieval —
+ * global rows plus the active project's rows only, so another project's
+ * important entries never leak into this session.
+ */
+export function getImportantMemories(
+  dbManager: DatabaseManager,
+  options: { projects?: Array<string | null>; limit?: number } = {},
+): SqliteMemoryEntry[] {
+  const db = dbManager.getDb();
+  const params: unknown[] = [];
+  const conditions = ['important = 1'];
+  conditions.push(...buildProjectScopeConditions(params, options.projects, 'memories'));
+  const limitClause = options.limit && options.limit > 0 ? 'LIMIT ?' : '';
+  if (limitClause) params.push(options.limit);
+  const rows = db.prepare(`
+    SELECT ${MEMORY_SELECT_COLUMNS}
+    FROM memories
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY id ASC
+    ${limitClause}
+  `).all(...params) as Array<{
+    id: number;
+    project: string | null;
+    target: string;
+    category: string | null;
+    content: string;
+    keywords: string | null;
+    important: number | null;
+    failure_reason: string | null;
+    tool_state: string | null;
+    corrected_to: string | null;
+    created: string;
+    last_referenced: string;
+    source_session: string | null;
+  }>;
+  return rows.map(mapRow);
+}
+
+export interface ImportantPoolStats {
+  count: number;
+  chars: number;
+}
+
+/** Size of the always-injected pool in the given scopes (soft budget checks). */
+export function getImportantPoolStats(
+  dbManager: DatabaseManager,
+  options: { projects?: Array<string | null> } = {},
+): ImportantPoolStats {
+  const entries = getImportantMemories(dbManager, options);
+  return {
+    count: entries.length,
+    chars: entries.reduce((total, entry) => total + entry.content.length, 0),
+  };
 }
 
 /**
@@ -1324,6 +1416,7 @@ export function getRecentFailures(
     category: string | null;
     content: string;
     keywords: string | null;
+    important: number | null;
     failure_reason: string | null;
     tool_state: string | null;
     corrected_to: string | null;

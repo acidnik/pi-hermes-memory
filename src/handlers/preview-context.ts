@@ -5,22 +5,9 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
-import type { StandingInstructions } from "../store/standing-instructions.js";
 import { resolveMemoryPolicyPrompt } from "../prompt-context.js";
 import type { MemoryConfig } from "../types.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
-
-function appendStandingBlock(lines: string[], standing: StandingInstructions | null): number {
-  const rendered = standing?.render();
-  if (!rendered?.block) return 0;
-  lines.push("  ── STANDING INSTRUCTIONS (always injected) ─────────────────");
-  lines.push(rendered.block);
-  if (rendered.omittedCount > 0) {
-    lines.push(`  ⚠️ ${rendered.omittedCount} pinned instruction(s) exceed the budget and are NOT injected.`);
-  }
-  lines.push("");
-  return 1;
-}
 
 export function registerPreviewContextCommand(
   pi: ExtensionAPI,
@@ -28,7 +15,6 @@ export function registerPreviewContextCommand(
   projectStore: ProjectStoreRef,
   projectName: ProjectNameRef,
   config: Pick<MemoryConfig, "memoryMode" | "memoryPolicyStyle" | "memoryPolicyCustomText"> = { memoryMode: "policy-only" },
-  standing: StandingInstructions | null = null,
 ): void {
   pi.registerCommand("memory-preview-context", {
     description: "Preview the memory policy or legacy memory context blocks",
@@ -45,6 +31,8 @@ export function registerPreviewContextCommand(
         lines.push(`  Policy style: ${config.memoryPolicyStyle ?? "full"}`);
         lines.push("  This is the memory policy appended to the system prompt.");
         lines.push("  Full Markdown memories are NOT injected in this mode.");
+        lines.push("  Always-injected (important) entries arrive as a separate block at the end");
+        lines.push("  of the first turn — see /memory-pin or memory_search({ important: true }).");
         lines.push("");
         let blockCount = 0;
         if (policyPrompt) {
@@ -55,7 +43,6 @@ export function registerPreviewContextCommand(
           lines.push("  No memory policy context is injected for this policy style.");
           lines.push("");
         }
-        blockCount += appendStandingBlock(lines, standing);
         lines.push(`  Blocks shown: ${blockCount}`);
         ctx.ui.notify(lines.join("\n"), "info");
         return;
@@ -89,8 +76,6 @@ export function registerPreviewContextCommand(
         lines.push(projectBlock);
         lines.push("");
       }
-
-      blockCount += appendStandingBlock(lines, standing);
 
       if (blockCount === 0) {
         lines.push("  No memory context blocks are currently injected.");

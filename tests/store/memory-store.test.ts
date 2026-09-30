@@ -216,7 +216,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.match(raw!, /keys=beta, бета/, "new keywords land in the entry metadata");
 
       // Re-tag: the text stays verbatim, only the keywords change.
-      const retagged = await store.retag("memory", `${TEST_MARKER} keyworded fact v3`, ["gamma", "гамма"]);
+      const retagged = await store.patchMetadata("memory", `${TEST_MARKER} keyworded fact v3`, { keywords: ["gamma", "гамма"] });
       assert.ok(retagged.success);
       assert.equal(retagged.message, "Entry re-tagged.");
       assert.deepStrictEqual(retagged.keywords, ["gamma", "гамма"]);
@@ -225,9 +225,54 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.match(rawRetag!, /keys=gamma, гамма/, "re-tag writes the new keyword metadata");
 
       // An empty list is refused: the entry would drop out of automatic retrieval.
-      const emptied = await store.retag("memory", `${TEST_MARKER} keyworded fact v3`, []);
+      const emptied = await store.patchMetadata("memory", `${TEST_MARKER} keyworded fact v3`, { keywords: [] });
       assert.equal(emptied.success, false);
       assert.match(emptied.error!, /at least one keyword/);
+    });
+
+    it("flags always-injected entries and toggles the flag without touching the text", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      const added = await store.add("memory", `${TEST_MARKER} critical rule`, undefined, {
+        keywords: ["critical"],
+        important: true,
+      });
+      assert.ok(added.success);
+      assert.equal(added.important, true);
+      assert.match(store.getRawEntriesForSync("memory")[0], /, imp=1(?:,| -->)/, "the flag round-trips through the metadata");
+
+      // Demote: metadata-only edit, text stays verbatim.
+      const demoted = await store.patchMetadata("memory", `${TEST_MARKER} critical rule`, { important: false });
+      assert.ok(demoted.success);
+      assert.equal(demoted.important, false);
+      assert.equal(demoted.entry, `${TEST_MARKER} critical rule`);
+      assert.deepStrictEqual(store.getMemoryEntries(), [`${TEST_MARKER} critical rule`]);
+      assert.doesNotMatch(store.getRawEntriesForSync("memory")[0], /imp=1/);
+
+      // Promote again, this time together with an empty keyword list (allowed
+      // for an always-injected entry: injection replaces keyword retrieval).
+      const promoted = await store.patchMetadata("memory", `${TEST_MARKER} critical rule`, {
+        keywords: [],
+        important: true,
+      });
+      assert.ok(promoted.success);
+      assert.equal(promoted.important, true);
+      assert.match(store.getRawEntriesForSync("memory")[0], /, imp=1(?:,| -->)/);
+    });
+
+    it("refuses a metadata edit that clears keywords without promoting the entry", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} keyworded rule`, undefined, { keywords: ["keep"] });
+
+      const cleared = await store.patchMetadata("memory", `${TEST_MARKER} keyworded rule`, { keywords: [] });
+      assert.equal(cleared.success, false);
+      assert.match(cleared.error!, /at least one keyword/);
+
+      const empty = await store.patchMetadata("memory", `${TEST_MARKER} keyworded rule`, {});
+      assert.equal(empty.success, false);
+      assert.match(empty.error!, /keywords and\/or important/);
     });
 
     it("no-ops on duplicate entry and returns message", async () => {

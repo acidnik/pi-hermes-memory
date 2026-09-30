@@ -42,7 +42,8 @@ describe("loadConfig", () => {
     assert.deepStrictEqual(config.sessionSearch, { variant: "legacy" });
     assert.strictEqual(config.llmModelOverride, undefined);
     assert.strictEqual(config.llmThinkingOverride, undefined);
-    assert.strictEqual(config.standingInstructionsEnabled, true);
+    // Retired: always-injected entries are `important` rows now.
+    assert.strictEqual(config.standingInstructionsEnabled, undefined);
     // Retention is disabled by default so existing history is never silently
     // deleted; a positive value opts in, 0/omitted disables.
     assert.strictEqual(config.sessionRetentionDays, 0);

@@ -80,6 +80,7 @@ export const SCHEMA_SQL = `
     category TEXT CHECK (category IN ('failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk')),
     content TEXT NOT NULL,
     keywords TEXT,
+    important INTEGER NOT NULL DEFAULT 0,
     failure_reason TEXT,
     tool_state TEXT,
     corrected_to TEXT,

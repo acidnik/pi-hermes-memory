@@ -116,6 +116,9 @@ export function memoryResultView(result: unknown): SharedOutputView {
             : "Updated";
   const target = firstText(data.target);
   const project = firstText(data.project);
+  const important = data.important === true;
+  /** The store reports false only when this call explicitly removed the flag. */
+  const demoted = data.important === false;
   const category = typeof data.category === "string" && data.category.trim()
     ? data.category.trim()
     : data.target === "failure"
@@ -135,6 +138,10 @@ export function memoryResultView(result: unknown): SharedOutputView {
 
   const parts = [outcome];
   if (target) parts.push(`target: ${target}`);
+  // Always-injected entries are loud on purpose: they cost context in every
+  // session, so a promotion (and a demotion) must be visible at a glance.
+  if (important) parts.push("❗important");
+  else if (demoted) parts.push("important removed");
   if (category) parts.push(`category: ${category}`);
   if (showKeywords) parts.push(keywordsLine);
   if (evicted > 0) parts.push(`evicted: ${evicted}`);
@@ -146,7 +153,13 @@ export function memoryResultView(result: unknown): SharedOutputView {
   }
 
   const lines = [primaryMessage || `${outcome}.`];
+  if (important) {
+    lines.push("❗ ALWAYS-INJECTED — this entry is injected at the start of every session.");
+  } else if (demoted) {
+    lines.push("No longer always-injected — back to keyword retrieval.");
+  }
   const meta = [`target: ${target ?? "?"}`, `scope=${scopeLabel(project)}`];
+  if (important) meta.push("always-injected");
   if (category) meta.push(`category: ${category}`);
   if (entryCount !== undefined) meta.push(countLabel(entryCount, "entry", "entries"));
   lines.push(meta.join(" · "));

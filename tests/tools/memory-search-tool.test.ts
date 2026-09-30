@@ -87,6 +87,34 @@ describe('registerMemorySearchTool', () => {
     dbManager.close();
   });
 
+  it('marks always-injected entries and lists the pool on demand', async () => {
+    const dbManager = makeDbManager();
+    addMemory(
+      dbManager, 'critical rule', 'memory',
+      null, null, null, null, null,
+      undefined, undefined, undefined, null,
+      true,
+    );
+    addMemory(dbManager, 'ordinary fact', 'memory');
+
+    let captured: any;
+    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+
+    const searched = (await captured.execute('tc-1', { query: 'critical' })).content[0].text;
+    assert.match(searched, /\[important\] critical rule/);
+
+    const listed = await captured.execute('tc-2', { important: true });
+    assert.equal(listed.details.count, 1);
+    assert.match(listed.content[0].text, /1 always-injected entry/);
+    assert.match(listed.content[0].text, /critical rule/);
+    assert.doesNotMatch(listed.content[0].text, /ordinary fact/);
+
+    const empty = await captured.execute('tc-3', { important: true });
+    assert.equal(empty.details.count, 1, 'the pool is unchanged by listing it');
+
+    dbManager.close();
+  });
+
   it('accepts target "project" as a filter and shows the schema value', async () => {
     const dbManager = makeDbManager();
     addMemory(dbManager, 'project deployment convention', 'memory', 'project-a');

@@ -20,13 +20,20 @@ import {
   loadMemoryScopeEntries,
   markMemoryEntriesInjected,
   isFts5QueryError,
+  getImportantMemories,
+  getImportantPoolStats,
 } from "../store/sqlite-memory-store.js";
-import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
+import { IMPORTANT_POOL_WARN_CHARS, IMPORTANT_POOL_WARN_ENTRIES, MEMORY_TOOL_DESCRIPTION } from "../constants.js";
 import { getCurrentSessionId } from "../session-id.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import type { MemoryCategory, MemoryResult } from "../types.js";
 import { normalizeMemoryLookupText } from "../store/memory-lookup.js";
-import { buildMissingKeywordsWarning, buildScopeHintWarning, detectProjectScopeSignals } from "../store/scope-lint.js";
+import {
+  buildImportantPoolWarning,
+  buildMissingKeywordsWarning,
+  buildScopeHintWarning,
+  detectProjectScopeSignals,
+} from "../store/scope-lint.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { memoryResultView } from "./tool-result-views.js";
 
@@ -40,6 +47,7 @@ const MEMORY_TOOL_DISPLAY_FIELDS = [
   "previous_entry",
   "removed_entry",
   "keywords",
+  "important",
   "project",
 ] as const satisfies readonly (keyof MemoryResult)[];
 
@@ -327,6 +335,8 @@ type MemoryToolParams = {
   category?: MemoryCategory;
   failure_reason?: string;
   keywords?: string[];
+  /** Always-injected entry (injected at the start of every session). */
+  important?: boolean;
 };
 export function registerMemoryTool(
   pi: ExtensionAPI,
@@ -415,7 +425,7 @@ export function registerMemoryTool(
     params: MemoryToolParams,
     signal?: AbortSignal,
   ) => {
-    const { target: rawTarget, content, old_text, category, failure_reason, keywords } = params;
+    const { target: rawTarget, content, old_text, category, failure_reason, keywords, important } = params;
     const target = rawTarget === "project" ? "memory" : rawTarget;
     const activeProjectStore = resolveProjectStore(projectStore);
     const activeProjectName = resolveProjectName(projectName);
@@ -455,12 +465,13 @@ export function registerMemoryTool(
             category: memoryCategory,
             failureReason: failure_reason,
             keywords,
+            important,
           });
           if (result.success && !syncHandled) {
             syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName, keywords);
           }
         } else {
-          result = await store_.add(target, content, signal, { keywords });
+          result = await store_.add(target, content, signal, { keywords, important });
           if (result.success && !syncHandled) {
             await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, activeProjectName);
             syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName, keywords);
@@ -469,14 +480,17 @@ export function registerMemoryTool(
         break;
       case "replace":
         if (!old_text) throw new Error("old_text is required for 'replace' action.");
-        // Without content this is a re-tag: the entry keeps its text and only
-        // its keywords change (safe path for curating an injected entry).
-        if (!content && (!keywords || keywords.length === 0)) {
-          throw new Error("content (or, for a keyword-only re-tag, keywords) is required for 'replace' action.");
+        // Without content this is a metadata-only edit: the entry keeps its text
+        // and only keywords and/or the important flag change (the safe path for
+        // curating an entry that was injected for the wrong reason).
+        if (!content && keywords === undefined && important === undefined) {
+          throw new Error(
+            "content (or, for a metadata-only edit, keywords and/or important) is required for 'replace' action.",
+          );
         }
         result = content
-          ? await store_.replace(target, old_text, content, undefined, { keywords })
-          : await store_.retag(target, old_text, keywords ?? []);
+          ? await store_.replace(target, old_text, content, undefined, { keywords, important })
+          : await store_.patchMetadata(target, old_text, { keywords, important });
         if (result.success && content && !syncHandled) {
           syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName, keywords);
         }
@@ -520,6 +534,22 @@ export function registerMemoryTool(
         && result.keywords.length === 0;
     if (result.success && keywordless) {
       result = appendWarning(result, buildMissingKeywordsWarning(rawTarget));
+    }
+    if (result.success && important === true && dbManager) {
+      // Soft budget: the always-injected pool is paid for by every session.
+      const projects: Array<string | null> = activeProjectName ? [null, activeProjectName] : [null];
+      const pool = getImportantPoolStats(dbManager, { projects });
+      if (pool.count > IMPORTANT_POOL_WARN_ENTRIES || pool.chars > IMPORTANT_POOL_WARN_CHARS) {
+        const preview = getImportantMemories(dbManager, { projects }).slice(0, 5).map((entry) => {
+          const scope = entry.target === "memory" && entry.project ? `project:${entry.project}` : entry.target;
+          const text = entry.content.length > 70 ? `${entry.content.slice(0, 70)}…` : entry.content;
+          return `[${scope}] ${text}`;
+        });
+        result = appendWarning(result, buildImportantPoolWarning(
+          { ...pool, preview },
+          { maxEntries: IMPORTANT_POOL_WARN_ENTRIES, maxChars: IMPORTANT_POOL_WARN_CHARS },
+        ));
+      }
     }
 
     return {
@@ -579,6 +609,13 @@ This action-specific tool accepts only the parameters listed in its schema.`;
   const category = StringEnum(["failure", "correction", "insight", "preference", "convention", "tool-quirk"] as const, {
     description: "Category for failure memories.",
   });
+  const importantFlag = Type.Optional(Type.Boolean({
+    description:
+      "Always-injected: the entry is injected at the start of every session (in its own project scope) instead of waiting for a keyword match. "
+      + "Use it for critical facts that are useful in EVERY session and hard to retrieve by keywords — the same role AGENTS.md entries play. "
+      + "It is a per-session context tax, so promote sparingly, demote with important:false when it stops being true, and never use it for "
+      + "project- or task-specific details that belong to a single session.",
+  }));
 
   registerActionTool(
     "add",
@@ -593,6 +630,7 @@ Add one durable entry. The target and content fields are required.`,
       category: Type.Optional(category),
       failure_reason: Type.Optional(Type.String({ description: "Why a failure occurred." })),
       keywords: keywordList,
+      important: importantFlag,
     }),
   );
   registerActionTool(
@@ -601,17 +639,19 @@ Add one durable entry. The target and content fields are required.`,
     "Memory Replace",
     `${commonDescription}
 
-Replace one existing entry. Pass content to rewrite it, or keywords alone to
-re-tag it: without content the entry keeps its text verbatim and only its
-keywords change (use that to fix an entry that was injected for the wrong
-reason — an over-broad keyword, a wrong scope label — without touching the
-fact). The target and old_text fields are always required; keywords alone are
-enough without content.`,
+Replace one existing entry. Pass content to rewrite it, or keywords/important
+alone to change only the metadata: without content the entry keeps its text
+verbatim and only its keywords and/or the always-injected flag change (use that
+to fix an entry that was injected for the wrong reason — an over-broad keyword,
+a stale fact, a wrong scope label — without touching the fact). The target and
+old_text fields are always required; keywords and/or important alone are enough
+without content.`,
     Type.Object({
       target,
       old_text: Type.String({ description: "Substring identifying the entry to replace." }),
-      content: Type.Optional(Type.String({ description: "Replacement entry content. Omit to change only the keywords." })),
+      content: Type.Optional(Type.String({ description: "Replacement entry content. Omit to change only keywords/important." })),
       keywords: keywordList,
+      important: importantFlag,
     }),
   );
   registerActionTool(

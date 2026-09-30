@@ -104,6 +104,26 @@ export function buildMissingKeywordsWarning(target: string): string {
 }
 
 /**
+ * Soft-budget warning for the always-injected pool (`important: true`). Nothing
+ * is rejected — the pool simply costs context in every session, so the card says
+ * how big it is and what to do about it.
+ */
+export function buildImportantPoolWarning(
+  pool: { count: number; chars: number; preview: string[] },
+  limits: { maxEntries: number; maxChars: number },
+): string {
+  const lines = [
+    `Important pool is large: ${pool.count} entries / ${pool.chars} chars are injected into the start of every session.`,
+    `Demote or remove what is no longer worth that cost (memory_replace with important:false, or memory_remove) — reserve "important" for facts that help in EVERY session, not just the current project or task.`,
+  ];
+  if (pool.preview.length > 0) {
+    lines.push(`Current pool (${pool.preview.length} of ${pool.count}):`);
+    for (const item of pool.preview) lines.push(`  - ${item}`);
+  }
+  return lines.join("\n");
+}
+
+/**
  * Non-blocking scope warning. The FIRST LINE is the gist — the tool card shows it
  * collapsed, so it has to stand alone; the rest carries the rule, the
  * "nothing was blocked" reassurance and the matched snippets.

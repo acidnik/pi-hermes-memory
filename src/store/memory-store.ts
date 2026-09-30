@@ -295,9 +295,11 @@ export class MemoryStore {
     target: "memory" | "user" | "failure",
     content: string,
     signal?: AbortSignal,
-    options: { keywords?: string[]; project?: string } = {},
+    options: { keywords?: string[]; project?: string; important?: boolean } = {},
   ): Promise<MemoryResult> {
-    return this.addWithConsolidation(target, content, signal, 1, "Entry added.", options.project, options.keywords);
+    return this.addWithConsolidation(
+      target, content, signal, 1, "Entry added.", options.project, options.keywords, options.important,
+    );
   }
 
   async addFailure(content: string, options: {
@@ -307,11 +309,14 @@ export class MemoryStore {
     correctedTo?: string;
     project?: string;
     keywords?: string[];
+    /** Always-injected failure lesson (rare: reserve it for critical ones). */
+    important?: boolean;
     signal?: AbortSignal;
   }): Promise<MemoryResult> {
     const failureText = this.buildFailureMemoryText(content, options);
     return this.addWithConsolidation(
       "failure", failureText, options.signal, 1, "Failure memory saved: " + options.category, options.project, options.keywords,
+      options.important,
     );
   }
 
@@ -336,6 +341,7 @@ export class MemoryStore {
     project: string | undefined,
     keywords: string[] | undefined,
     markMutation: () => void,
+    important?: boolean,
   ): Promise<MemoryResult> {
     content = content.trim();
     if (!content) return { success: false, error: "Content cannot be empty." };
@@ -357,13 +363,13 @@ export class MemoryStore {
     if (duplicate) {
       return {
         ...this.successResponse(target, "Entry already exists (no duplicate added)."),
-        ...this.displayContext(content, keywords, project),
+        ...this.displayContext(content, keywords, project, important),
       };
     }
 
     // Encode metadata: both dates = today
     const today = new Date().toISOString().split("T")[0];
-    const encoded = this.encodeEntry(content, today, today, project, keywords);
+    const encoded = this.encodeEntry(content, today, today, project, keywords, important);
 
     const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
     if (this.capEnforced && newTotal > limit) {
@@ -386,7 +392,7 @@ export class MemoryStore {
     this.pendingInjected.push({ target, raw: encoded, project });
     return {
       ...this.successResponse(target, addedMessage),
-      ...this.displayContext(content, keywords, project),
+      ...this.displayContext(content, keywords, project, important),
     };
   }
 
@@ -398,11 +404,13 @@ export class MemoryStore {
     content: string,
     keywords?: string[],
     project?: string,
-  ): Pick<MemoryResult, "entry" | "keywords" | "project"> {
+    important?: boolean,
+  ): Pick<MemoryResult, "entry" | "keywords" | "project" | "important"> {
     return {
       entry: content,
       keywords: keywords && keywords.length > 0 ? keywords : undefined,
       project: project?.trim() || undefined,
+      important: important === true ? true : undefined,
     };
   }
 
@@ -414,10 +422,11 @@ export class MemoryStore {
     addedMessage: string,
     project?: string,
     keywords?: string[],
+    important?: boolean,
   ): Promise<MemoryResult> {
     const result = await this.runTargetMutation(
       target,
-      (markMutation) => this._add(target, content, signal, addedMessage, project, keywords, markMutation),
+      (markMutation) => this._add(target, content, signal, addedMessage, project, keywords, markMutation, important),
       signal,
     );
     if (
@@ -621,33 +630,46 @@ export class MemoryStore {
     oldText: string,
     newContent: string,
     signal?: AbortSignal,
-    options: { keywords?: string[] } = {},
+    options: { keywords?: string[]; important?: boolean } = {},
   ): Promise<MemoryResult> {
     return this.runTargetMutation(
       target,
-      (markMutation) => this.replaceUnlocked(target, oldText, newContent, markMutation, options.keywords),
+      (markMutation) => this.replaceUnlocked(
+        target, oldText, newContent, markMutation, options.keywords, "Entry replaced.", options.important,
+      ),
       signal,
     );
   }
 
   /**
-   * Rewrite ONLY the keywords of the matched entry, keeping its text verbatim.
+   * Rewrite only the METADATA of the matched entry, keeping its text verbatim.
    * Backs `memory_replace` without `content`: an entry that was injected for the
-   * wrong reason can be re-tagged in one call, with no risk of mangling the fact.
+   * wrong reason can be re-tagged (keywords) or promoted/demoted (`important`)
+   * in one call, with no risk of mangling the fact.
    */
-  async retag(
+  async patchMetadata(
     target: "memory" | "user" | "failure",
     oldText: string,
-    keywords: string[],
+    patch: { keywords?: string[]; important?: boolean },
     signal?: AbortSignal,
   ): Promise<MemoryResult> {
-    const cleaned = (keywords ?? []).map((item) => item.trim()).filter(Boolean);
-    if (cleaned.length === 0) {
+    const hasKeywords = patch.keywords !== undefined;
+    const cleaned = (patch.keywords ?? []).map((item) => item.trim()).filter(Boolean);
+    if (!hasKeywords && patch.important === undefined) {
       return {
         success: false,
-        error: "Re-tagging needs at least one keyword: retrieval matches keywords only, so an entry without keywords is never surfaced automatically.",
+        error: "A metadata-only edit needs keywords and/or important. Pass content to rewrite the entry text.",
       };
     }
+    // Clearing the last keyword makes an entry unreachable for retrieval — only
+    // allowed together with promoting it to always-injected.
+    if (hasKeywords && cleaned.length === 0 && patch.important !== true) {
+      return {
+        success: false,
+        error: "Re-tagging needs at least one keyword: retrieval matches keywords only, so an entry without keywords is never surfaced automatically (mark it important if it must always be present).",
+      };
+    }
+
     return this.runTargetMutation(
       target,
       async (markMutation) => {
@@ -662,8 +684,17 @@ export class MemoryStore {
             matches: matches.map((entry) => this.stripMetadata(entry).slice(0, 80) + (entry.length > 80 ? "..." : "")),
           };
         }
-        // Same text, new keywords — replaceUnlocked keeps created/project/session.
-        return this.replaceUnlocked(target, lookup, this.stripMetadata(matches[0]), markMutation, cleaned, "Entry re-tagged.");
+        // Same text, new metadata — replaceUnlocked keeps created/project/session.
+        const message = hasKeywords ? "Entry re-tagged." : "Entry updated.";
+        return this.replaceUnlocked(
+          target,
+          lookup,
+          this.stripMetadata(matches[0]),
+          markMutation,
+          hasKeywords ? cleaned : undefined,
+          message,
+          patch.important,
+        );
       },
       signal,
     );
@@ -676,6 +707,7 @@ export class MemoryStore {
     markMutation: () => void,
     keywords?: string[],
     message = "Entry replaced.",
+    important?: boolean,
   ): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     newContent = newContent.trim();
@@ -707,7 +739,19 @@ export class MemoryStore {
     const nextKeywords = keywords && keywords.length > 0 ? keywords : undefined;
     const replacements = new Map(matches.map((entry) => {
       const decoded = this.decodeEntry(entry);
-      return [entry, this.encodeEntry(newContent, decoded.created, today, decoded.project ?? undefined, nextKeywords ?? decoded.keywords)];
+      const entryKeywords = nextKeywords ?? decoded.keywords;
+      const entryImportant = important === undefined ? decoded.important : important;
+      return [
+        entry,
+        this.encodeEntry(
+          newContent,
+          decoded.created,
+          today,
+          decoded.project ?? undefined,
+          entryKeywords,
+          entryImportant,
+        ),
+      ];
     }));
     const testEntries = entries.map((entry) => replacements.get(entry) ?? entry);
 
@@ -734,6 +778,11 @@ export class MemoryStore {
       // An empty array means "this entry has no keywords" (checked by the tool's
       // keywords lint); undefined means the store cannot tell (multi-match).
       keywords: nextKeywords ?? previousDecoded?.keywords ?? (previousDecoded ? [] : undefined),
+      // true = always-injected, false = explicitly demoted in this call,
+      // undefined = "not important" (or unknown for a multi-match replace).
+      important: important === undefined
+        ? (previousDecoded?.important ? true : undefined)
+        : important,
       project: previousDecoded?.project ?? undefined,
     };
   }
@@ -843,7 +892,14 @@ export class MemoryStore {
    * Encode metadata (created, lastReferenced) as an HTML comment appended to entry text.
    * The comment is invisible in markdown and transparent to the § delimiter.
    */
-  private encodeEntry(text: string, created: string, lastReferenced: string, project?: string, keywords?: string[] | null): string {
+  private encodeEntry(
+    text: string,
+    created: string,
+    lastReferenced: string,
+    project?: string,
+    keywords?: string[] | null,
+    important?: boolean,
+  ): string {
     const projectMetadata = project?.trim()
       ? `, project64=${Buffer.from(project.trim(), "utf-8").toString("base64url")}`
       : "";
@@ -860,19 +916,20 @@ export class MemoryStore {
     const keysMetadata = cleanedKeywords.length > 0
       ? `, keys=${cleanedKeywords.join(", ")}`
       : "";
-    return `${text} <!-- created=${created}, last=${lastReferenced}${keysMetadata}${projectMetadata}${srcMetadata} -->`;
+    const importantMetadata = important ? ", imp=1" : "";
+    return `${text} <!-- created=${created}, last=${lastReferenced}${keysMetadata}${importantMetadata}${projectMetadata}${srcMetadata} -->`;
   }
 
   /**
    * Decode entry text, extracting metadata if present.
    * Falls back to today's date for legacy entries without metadata.
    */
-  private decodeEntry(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null; sourceSession: string | null } {
-    const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*project64=([A-Za-z0-9_-]+))?(?:,\s*src=([A-Za-z0-9_-]+))?\s*-->\s*$/s);
+  private decodeEntry(raw: string): { text: string; created: string; lastReferenced: string; project: string | null; keywords: string[] | null; important: boolean; sourceSession: string | null } {
+    const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+?)(?:,\s*keys=([^>]*?))?(?:,\s*(imp=1))?(?:,\s*project64=([A-Za-z0-9_-]+))?(?:,\s*src=([A-Za-z0-9_-]+))?\s*-->\s*$/s);
     if (match) {
       let project: string | null = null;
-      if (match[5]) {
-        try { project = Buffer.from(match[5], "base64url").toString("utf-8").trim() || null; } catch {}
+      if (match[6]) {
+        try { project = Buffer.from(match[6], "base64url").toString("utf-8").trim() || null; } catch {}
       }
       const keywords = match[4]
         ? match[4].split(/,\s*/).map((item) => item.trim()).filter(Boolean)
@@ -883,12 +940,21 @@ export class MemoryStore {
         lastReferenced: match[3].trim(),
         project,
         keywords: keywords && keywords.length > 0 ? keywords : null,
-        sourceSession: match[6] ?? null,
+        important: match[5] === "imp=1",
+        sourceSession: match[7] ?? null,
       };
     }
     // Legacy entry without metadata — use today as default
     const today = new Date().toISOString().split("T")[0];
-    return { text: raw.trim(), created: today, lastReferenced: today, project: null, keywords: null, sourceSession: null };
+    return {
+      text: raw.trim(),
+      created: today,
+      lastReferenced: today,
+      project: null,
+      keywords: null,
+      important: false,
+      sourceSession: null,
+    };
   }
 
   /** Strip metadata comment from entry text for display. */

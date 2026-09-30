@@ -12,7 +12,7 @@ process.env.PI_CODING_AGENT_DIR = root;
 const { default: registerExtension } = await import("../src/index.js");
 const { MemoryStore } = await import("../src/store/memory-store.js");
 const { DatabaseManager } = await import("../src/store/db.js");
-const { syncMemoryEntry } = await import("../src/store/sqlite-memory-store.js");
+const { syncMemoryEntry, getImportantMemories } = await import("../src/store/sqlite-memory-store.js");
 const globalDir = path.join(root, "pi-hermes-memory");
 const cwd = path.join(root, "workspace");
 const projectDir = path.join(root, "projects-memory", "workspace");
@@ -119,9 +119,11 @@ describe("lazy startup lifecycle", () => {
     const resources = await emit("resources_discover", { cwd, reason: "startup" });
     assert.deepEqual(resources.skillPaths, [path.join(globalDir, "skills"), path.join(projectDir, "skills")]);
     const prompt = await emit("before_agent_start", { systemPrompt: "base" });
-    assert.match(prompt.systemPrompt, /Always ask before deployment/);
     assert.match(prompt.systemPrompt, /memory-policy/);
     assert.doesNotMatch(prompt.systemPrompt, /durable global fact/);
+    // Pins are always-injected entries now (a separate tail block), never text
+    // spliced into the system prompt.
+    assert.doesNotMatch(prompt.systemPrompt, /Always ask before deployment/);
     await emit("message_end", { message: { role: "user", content: "hello" } });
     await emit("turn_end", { message: { role: "assistant", content: [] } });
     await commands["memory-preview-context"].handler("", ctx);
@@ -334,10 +336,7 @@ describe("lazy startup lifecycle", () => {
     assert.doesNotMatch(mirrored, /fresh sqlite preference/, "add mirrored Markdown");
   });
 
-  it("keeps legacy pins and skill discovery available even when memory initialization fails", async (t) => {
-    const legacy = path.join(root, "memory");
-    await fs.mkdir(legacy);
-    await fs.rename(path.join(globalDir, "STANDING.md"), path.join(legacy, "STANDING.md"));
+  it("keeps skill discovery alive when memory initialization fails", async (t) => {
     const getDb = t.mock.method(DatabaseManager.prototype, "getDb", () => { throw new Error("database unavailable"); });
     register();
     await emit("session_start");
@@ -345,9 +344,39 @@ describe("lazy startup lifecycle", () => {
     assert.equal(resources.skillPaths.length, 2);
     assert.equal(getDb.mock.callCount(), 0);
     const prompt = await emit("before_agent_start", { systemPrompt: "base" });
-    assert.match(prompt.systemPrompt, /Always ask before deployment/);
+    assert.match(prompt.systemPrompt, /memory-policy/);
     await assert.rejects(search(), /database unavailable/);
     const afterFailure = await emit("before_agent_start", { systemPrompt: "base" });
-    assert.match(afterFailure.systemPrompt, /Always ask before deployment/);
+    assert.match(afterFailure.systemPrompt, /memory-policy/);
+  });
+
+  it("folds a legacy STANDING.md into the always-injected pool once", async () => {
+    // The retired file is the migration input for `important` entries.
+    register();
+    await emit("session_start");
+    await search(); // force initialization (runs the one-time migration)
+
+    const db = new DatabaseManager(globalDir);
+    try {
+      const pool = getImportantMemories(db);
+      assert.deepStrictEqual(pool.map((entry) => entry.content), ["Always ask before deployment."]);
+      assert.equal(pool[0].important, true);
+    } finally {
+      db.close();
+    }
+
+    // Idempotent: a second initialization does not duplicate the pin.
+    const again = new DatabaseManager(globalDir);
+    try {
+      const { migrateStandingInstructions } = await import("../src/handlers/important-memory.js");
+      assert.equal(
+        migrateStandingInstructions(again, [path.join(globalDir, "STANDING.md")]),
+        0,
+        "the standing_migrated marker makes the fold a no-op",
+      );
+      assert.equal(getImportantMemories(again).length, 1);
+    } finally {
+      again.close();
+    }
   });
 });

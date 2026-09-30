@@ -1,7 +1,6 @@
 import { MEMORY_POLICY_PROMPT, MEMORY_POLICY_PROMPT_COMPACT } from "./constants.js";
 import type { MemoryConfig } from "./types.js";
 import type { MemoryStore } from "./store/memory-store.js";
-import type { StandingInstructions } from "./store/standing-instructions.js";
 
 type MemoryPolicyConfig = Pick<MemoryConfig, "memoryPolicyStyle" | "memoryPolicyCustomText">;
 
@@ -35,12 +34,9 @@ export async function buildPromptContext(
   store: MemoryStore,
   projectStore: MemoryStore | null,
   projectName: string,
-  standing: StandingInstructions | null = null,
 ): Promise<string> {
-  const standingBlock = standing?.formatForSystemPrompt() ?? "";
-
   if (config.memoryMode === "policy-only") {
-    return [resolveMemoryPolicyPrompt(config), standingBlock].filter(Boolean).join("\n\n");
+    return resolveMemoryPolicyPrompt(config);
   }
 
   const memoryBlock = store.formatForSystemPrompt();
@@ -49,7 +45,6 @@ export async function buildPromptContext(
   const parts: string[] = [];
   if (memoryBlock) parts.push(memoryBlock);
   if (projectBlock) parts.push(projectBlock);
-  if (standingBlock) parts.push(standingBlock);
 
   return parts.join("\n\n");
 }

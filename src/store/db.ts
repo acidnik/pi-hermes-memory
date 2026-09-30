@@ -953,6 +953,10 @@ export class DatabaseManager {
     if (!names.has('source_session')) {
       db.exec('ALTER TABLE memories ADD COLUMN source_session TEXT');
     }
+    if (!names.has('important')) {
+      // Always-injected entries. Existing rows default to 0 (not important).
+      db.exec('ALTER TABLE memories ADD COLUMN important INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   private ensureSessionsColumns(db: DatabaseLike): void {
@@ -1018,6 +1022,7 @@ export class DatabaseManager {
             category TEXT CHECK (category IN ('failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk')),
             content TEXT NOT NULL,
             keywords TEXT,
+            important INTEGER NOT NULL DEFAULT 0,
             failure_reason TEXT,
             tool_state TEXT,
             corrected_to TEXT,
@@ -1028,8 +1033,8 @@ export class DatabaseManager {
         `);
 
         db.exec(`
-          INSERT INTO memories_new (id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, source_session, created, last_referenced)
-          SELECT id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, source_session, created, last_referenced
+          INSERT INTO memories_new (id, project, target, category, content, keywords, important, failure_reason, tool_state, corrected_to, source_session, created, last_referenced)
+          SELECT id, project, target, category, content, keywords, important, failure_reason, tool_state, corrected_to, source_session, created, last_referenced
           FROM memories;
         `);
 
@@ -1054,6 +1059,7 @@ export class DatabaseManager {
           category TEXT CHECK (category IN ('failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk')),
           content TEXT NOT NULL,
           keywords TEXT,
+          important INTEGER NOT NULL DEFAULT 0,
           failure_reason TEXT,
           tool_state TEXT,
           corrected_to TEXT,
@@ -1064,8 +1070,8 @@ export class DatabaseManager {
       `);
 
       db.exec(`
-          INSERT INTO memories_new (id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, source_session, created, last_referenced)
-          SELECT id, project, target, category, content, keywords, failure_reason, tool_state, corrected_to, source_session, created, last_referenced
+          INSERT INTO memories_new (id, project, target, category, content, keywords, important, failure_reason, tool_state, corrected_to, source_session, created, last_referenced)
+          SELECT id, project, target, category, content, keywords, important, failure_reason, tool_state, corrected_to, source_session, created, last_referenced
           FROM memories;
         `);
 
