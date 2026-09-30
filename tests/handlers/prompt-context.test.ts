@@ -57,6 +57,14 @@ describe("buildPromptContext", () => {
     assert.match(MEMORY_POLICY_PROMPT_COMPACT, /"user" only holds what stays true in EVERY project/);
   });
 
+  it("carries the keywords rule in both policies", async () => {
+    assert.match(MEMORY_POLICY_PROMPT, /Keywords — automatic retrieval matches ONLY them/);
+    assert.match(MEMORY_POLICY_PROMPT, /An entry saved without keywords is never surfaced that way/);
+    assert.match(MEMORY_POLICY_PROMPT, /should pull THIS entry when it later shows up in a user prompt or a bash command/);
+    assert.match(MEMORY_POLICY_PROMPT, /Generic words match everything and only add noise/);
+    assert.match(MEMORY_POLICY_PROMPT_COMPACT, /matches the keywords column ONLY/);
+  });
+
   it("returns the compact policy prompt when policy style is compact", async () => {
     const result = await buildPromptContext(
       { memoryMode: "policy-only", memoryPolicyStyle: "compact" },

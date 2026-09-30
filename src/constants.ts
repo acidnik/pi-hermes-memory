@@ -102,6 +102,11 @@ Scope rule — classify by DOMAIN, not by the speech act:
 - A mixed fact must be split: the cross-project rule goes to "user"/"memory", the concrete repo, package and command details go to "project".
 - Test before saving: "if I switched to another repository, would this still be true?" No -> "project".
 
+Keywords — automatic retrieval matches ONLY them:
+- Before each user message and on bash tool calls the extension searches the keywords column only. An entry saved without keywords is never surfaced that way; memory_search can still find it by its content.
+- A keyword is a word that should pull THIS entry when it later shows up in a user prompt or a bash command: the specific terms the user or the agent would really use for this fact. Prefer specific over generic ("expandPasteMarkers", "транскрипция", not "editor", "memory").
+- Give every durable entry 3-8 keywords: synonyms, other languages (RU↔EN), inflections (index → indices, индексация), plus the file, command, package and tool names involved. Generic words match everything and only add noise.
+
 memory_search filters:
 - target accepts "memory", "user", "failure", or "project" (project-attributed memory entries).
 - project filters project-scoped memories by project name.
@@ -152,6 +157,8 @@ Use memory_search when the current task may depend on durable context from previ
 
 Memory write targets: user for preferences/profile; memory for global notes and environment/tool facts; project for repo-specific conventions and workflows; failure for categorized lessons. Classify by domain, not by the speech act: anything naming a repo, path, package, command or branch is "project" even when phrased as a standing instruction ("when I say X, do Y"); "user" only holds what stays true in EVERY project, and mixed facts must be split.
 
+Keywords: automatic retrieval (before user messages and on bash tool calls) matches the keywords column ONLY, so an entry without keywords is never auto-retrieved (memory_search still finds it by content). Pass 3-8 specific keywords that should pull this entry — the terms the user or the agent would really use for this fact, plus synonyms, other languages (RU↔EN), inflections and the file, command, package or tool names involved; generic words are noise.
+
 memory_search filters: target searches user/global/failure memories; project filters project-scoped memories; category filters categorized failure/lesson memories only.
 
 Use the skill_manage tool during normal work for reusable procedures. On create, scope is required: global for transferable workflows, project for repo-specific ones. Prefer structured fields for create/update/patch, patch for one section, and update for full rewrites. Skip one-off or overly narrow skills.
@@ -196,6 +203,11 @@ SCOPE RULE -- classify by DOMAIN, not by the speech act:
 - Split a mixed fact: the cross-project rule to "user"/"memory", the repo, package and command details to "project".
 - Ask yourself: "if I switched to another repository, would this still be true?" No -> "project".
 
+KEYWORDS -- they drive automatic retrieval:
+- Automatic retrieval (before a user message, on bash tool calls) matches the keywords column ONLY: an entry saved without keywords is never surfaced that way, though memory_search still matches its content.
+- A keyword is a word that should pull THIS entry when it later appears in a user prompt or a bash command — the terms the user or the agent would really use for this fact, specific rather than generic.
+- Pass 3-8 keywords: synonyms, other languages (RU<->EN), inflections, and the file, command, package or tool names involved. Generic words ("memory", "note", "fix") match everything and only add noise.
+
 TOOLS:
 - memory_add requires target and content; category and failure_reason are optional for failure memories.
 - memory_replace requires target, old_text, and content.
@@ -233,7 +245,7 @@ export const COMBINED_REVIEW_PROMPT = `Review the conversation above and conside
 
 For failures, include: what was tried, why it failed, what error occurred, and what worked instead.
 
-**Keywords**: For every fact you save, add searchable keywords — synonyms and equivalents of the subject, including other languages (RU↔EN) and inflections (index → indices, индексация). This lets memory_search find the fact by later mentions in any form.
+**Keywords**: automatic retrieval (before user messages, on bash tool calls) matches keywords ONLY — a fact saved without them is never surfaced that way. For every fact you save, provide 3-8 keywords that should pull it later: the specific terms the user or the agent would really use for this fact (not generic words like "memory" or "fix"), plus synonyms, other languages (RU↔EN), inflections (index → indices, индексация) and the file, command, package or tool names involved.
 
 **Skills**: Do NOT create or modify skills in this background review. Procedural skills are managed explicitly by the main agent through the skill_manage tool during normal work, not by this review subprocess.
 
@@ -261,7 +273,7 @@ Operation fields:
 - old_text: required for replace/remove (substring match)
 - category: for failure target — failure | correction | insight | convention | tool-quirk | preference
 - failure_reason: optional context for failure entries
-- keywords: optional array of searchable synonyms/equivalents (other languages, technical terms, inflections)`;
+- keywords: 3-8 terms that should retrieve this entry when they later appear in a user prompt or a bash command — the specific words the user or the agent would use for this fact (synonyms, other languages RU<->EN, inflections, file/command/package/tool names). Automatic retrieval matches keywords ONLY, so an add or replace without them is never auto-retrieved.`;
 
 export const DIRECT_REVIEW_SYSTEM_PROMPT = `You review coding conversations and extract durable memories worth saving across sessions.
 
@@ -269,7 +281,7 @@ Review these aspects:
 - **Memory**: User persona, preferences, expectations about how the agent should behave, work style.
 - **Failures & Corrections**: What failed, user corrections, insights, conventions, tool quirks.
 
-For every saved fact, provide **keywords**: searchable synonyms and equivalents of the subject (other languages, e.g. RU↔EN, technical terms, and inflections like index → indices/индекс). Keywords make the memory findable by later mentions in any form — see the keywords field below.
+For every saved fact, provide **keywords**: automatic retrieval (before user messages, on bash tool calls) matches the keywords column ONLY, so a fact without them is never surfaced that way. Give 3-8 keywords that should pull this entry when they later appear in a user prompt or a bash command — the specific terms the user or the agent would use for this fact, plus synonyms, other languages (RU↔EN), inflections (index → indices/индекс) and the file, command, package or tool names involved; avoid generic words.
 
 Do NOT create or modify skills. Only save genuinely durable facts — not task progress, session outcomes, or temporary state.
 
@@ -280,6 +292,8 @@ If nothing is worth saving, return {"operations":[]}.`;
 // ─── Direct (in-process) flush prompt — used by session-flush.ts when the
 // session is about to lose context (compaction/shutdown). ───
 export const DIRECT_FLUSH_SYSTEM_PROMPT = `The session is being compressed and about to lose context. Save anything worth remembering from the conversation — prioritize user preferences, corrections, and recurring patterns over task-specific details.
+
+Every saved fact needs 3-8 **keywords** that should retrieve it later (the specific terms the user or the agent would use for it, plus synonyms, RU↔EN, inflections and the file, command, package or tool names involved): automatic retrieval matches the keywords column ONLY, so a fact saved without them is never surfaced automatically.
 
 ${DIRECT_MEMORY_OPERATIONS_SCHEMA}
 
@@ -293,6 +307,7 @@ export const DIRECT_CONSOLIDATION_SYSTEM_PROMPT = `The memory store you're given
 - Remove outdated or superseded entries (entries older than 30 days without recent references are candidates for removal)
 - Keep the most important and frequently-referenced facts
 - Preserve user preferences and corrections (highest priority)
+- Every "add" operation MUST carry 3-8 \`keywords\` for the merged entry: reuse the union of the keywords of the entries being merged (they appear as \`keys=...\` in the entry metadata) and add any terms the new wording introduces. Automatic retrieval matches the keywords column only, so a merge without keywords silently drops the fact out of retrieval.
 
 Each entry shows when it was created and last referenced in HTML comments (<!-- created=..., last=... -->). Use this to identify stale entries.
 
@@ -310,7 +325,7 @@ Priority:
 
 If this contradicts an existing entry, use a "replace" operation to update it instead of "add".
 
-For every saved fact, include searchable **keywords** — synonyms and equivalents of the subject (other languages such as RU↔EN, technical terms, inflections) so the memory stays findable by later mentions in any form.
+For every saved fact, include **keywords**: automatic retrieval (before user messages, on bash tool calls) matches the keywords column ONLY, so an entry without them is never surfaced that way. Give 3-8 keywords that should pull this entry when they appear in a later user prompt or bash command — the specific terms the user or the agent would use for this fact, plus synonyms, other languages (RU↔EN), inflections and the file, command, package or tool names involved.
 
 ${DIRECT_MEMORY_OPERATIONS_SCHEMA}
 

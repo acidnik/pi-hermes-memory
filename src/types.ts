@@ -235,7 +235,10 @@ export interface MemoryMutationOperation {
   category?: MemoryCategory;
   failureReason?: string;
   project?: string;
-  /** Search synonyms / equivalents / inflections (add operations only). */
+  /**
+   * Retrieval keywords for this entry: 3-8 terms that should pull it when they
+   * appear in a later user prompt or bash command. Honored by add and replace.
+   */
   keywords?: string[];
 }
 

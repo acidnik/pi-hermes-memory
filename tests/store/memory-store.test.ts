@@ -187,6 +187,35 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.deepStrictEqual(removed.keywords, ["deploy", "деплой"]);
     });
 
+    it("replace sets keywords when given and keeps them when omitted", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+
+      const added = await store.add("memory", `${TEST_MARKER} keyworded fact`, undefined, {
+        keywords: ["alpha", "альфа"],
+      });
+      assert.ok(added.success);
+
+      // Omitted -> the entry keeps the keywords it already had.
+      const kept = await store.replace("memory", `${TEST_MARKER} keyworded fact`, `${TEST_MARKER} keyworded fact v2`);
+      assert.ok(kept.success);
+      assert.deepStrictEqual(kept.keywords, ["alpha", "альфа"]);
+
+      // Given -> they replace the entry's keywords.
+      const updated = await store.replace(
+        "memory",
+        `${TEST_MARKER} keyworded fact v2`,
+        `${TEST_MARKER} keyworded fact v3`,
+        undefined,
+        { keywords: ["beta", "бета"] },
+      );
+      assert.ok(updated.success);
+      assert.deepStrictEqual(updated.keywords, ["beta", "бета"]);
+      const raw = store.getRawEntriesForSync("memory").find((entry) => entry.includes("keyworded fact v3"));
+      assert.ok(raw, "replaced entry exists");
+      assert.match(raw!, /keys=beta, бета/, "new keywords land in the entry metadata");
+    });
+
     it("no-ops on duplicate entry and returns message", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();

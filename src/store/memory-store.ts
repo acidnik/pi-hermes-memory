@@ -578,7 +578,16 @@ export class MemoryStore {
         if (replacementError) return { success: false, error: replacementError };
         const replacements = new Map(matches.map((entry) => {
           const decoded = this.decodeEntry(entry);
-          return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined, decoded.keywords)];
+          return [
+            entry,
+            this.encodeEntry(
+              content,
+              decoded.created,
+              today,
+              decoded.project ?? undefined,
+              operation.keywords && operation.keywords.length > 0 ? operation.keywords : decoded.keywords,
+            ),
+          ];
         }));
         for (const replacement of replacements.values()) planNewTexts.push(replacement);
         plannedEntries = plannedEntries.map((entry) => replacements.get(entry) ?? entry);
@@ -607,10 +616,16 @@ export class MemoryStore {
     }, options.signal);
   }
 
-  async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string, signal?: AbortSignal): Promise<MemoryResult> {
+  async replace(
+    target: "memory" | "user" | "failure",
+    oldText: string,
+    newContent: string,
+    signal?: AbortSignal,
+    options: { keywords?: string[] } = {},
+  ): Promise<MemoryResult> {
     return this.runTargetMutation(
       target,
-      (markMutation) => this.replaceUnlocked(target, oldText, newContent, markMutation),
+      (markMutation) => this.replaceUnlocked(target, oldText, newContent, markMutation, options.keywords),
       signal,
     );
   }
@@ -620,6 +635,7 @@ export class MemoryStore {
     oldText: string,
     newContent: string,
     markMutation: () => void,
+    keywords?: string[],
   ): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     newContent = newContent.trim();
@@ -646,9 +662,12 @@ export class MemoryStore {
     const replacementError = this.validateWholeEntryReplacement(matches, oldText, newContent);
     if (replacementError) return { success: false, error: replacementError };
     const today = new Date().toISOString().split("T")[0];
+    // Explicit keywords replace the entry's keywords; without them the entry
+    // keeps the ones it already had.
+    const nextKeywords = keywords && keywords.length > 0 ? keywords : undefined;
     const replacements = new Map(matches.map((entry) => {
       const decoded = this.decodeEntry(entry);
-      return [entry, this.encodeEntry(newContent, decoded.created, today, decoded.project ?? undefined, decoded.keywords)];
+      return [entry, this.encodeEntry(newContent, decoded.created, today, decoded.project ?? undefined, nextKeywords ?? decoded.keywords)];
     }));
     const testEntries = entries.map((entry) => replacements.get(entry) ?? entry);
 
@@ -672,7 +691,9 @@ export class MemoryStore {
       // Display-only context (stripped from the model-facing tool payload).
       entry: newContent,
       previous_entry: previousEntry,
-      keywords: previousDecoded?.keywords ?? undefined,
+      // An empty array means "this entry has no keywords" (checked by the tool's
+      // keywords lint); undefined means the store cannot tell (multi-match).
+      keywords: nextKeywords ?? previousDecoded?.keywords ?? (previousDecoded ? [] : undefined),
       project: previousDecoded?.project ?? undefined,
     };
   }

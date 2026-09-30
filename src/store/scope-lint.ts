@@ -90,7 +90,21 @@ export function detectProjectScopeSignals(content: string): ScopeHint | null {
 }
 
 /**
- * Non-blocking warning text. The FIRST LINE is the gist — the tool card shows it
+ * Non-blocking warning for a durable entry saved without keywords. Automatic
+ * retrieval (before user messages and on bash tool calls) matches the keywords
+ * column only, so a keyword-less entry is invisible to it — memory_search still
+ * finds it by content.
+ */
+export function buildMissingKeywordsWarning(target: string): string {
+  return [
+    `No keywords: automatic retrieval will never surface this ${target} entry — it matches keywords only.`,
+    `memory_search still finds it by content. Add 3-8 keywords that should pull this entry when they appear in a user prompt or a bash command — the specific terms the user or the agent would use for this fact (synonyms, other languages, inflections, file/command/package/tool names); generic words are noise.`,
+    `Saved as requested — add them with memory_replace (keywords) or memory_remove + memory_add.`,
+  ].join("\n");
+}
+
+/**
+ * Non-blocking scope warning. The FIRST LINE is the gist — the tool card shows it
  * collapsed, so it has to stand alone; the rest carries the rule, the
  * "nothing was blocked" reassurance and the matched snippets.
  */

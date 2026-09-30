@@ -12,6 +12,7 @@ import { DatabaseManager } from "../../src/store/db.js";
 import { getMemories, searchMemories, syncMemoryEntry } from "../../src/store/sqlite-memory-store.js";
 import { ENTRY_DELIMITER, MEMORY_FILE } from "../../src/constants.js";
 import { Value } from "typebox/value";
+import { memoryResultView } from "../../src/tools/tool-result-views.js";
 
 describe("registerMemoryTool", () => {
   let tmpDir: string;
@@ -139,7 +140,11 @@ describe("registerMemoryTool", () => {
 
     it("warns (without blocking) when a user write looks project-specific", async () => {
       const tool = addTool();
-      const result = await tool.execute("tc-1", { action: "add", target: "user", content: PROJECT_SPECIFIC }, undefined, undefined, undefined);
+      const result = await tool.execute(
+        "tc-1",
+        { action: "add", target: "user", content: PROJECT_SPECIFIC, keywords: ["deploy", "деплой"] },
+        undefined, undefined, undefined,
+      );
 
       assert.strictEqual(result.details.success, true, "the lint must never block the write");
       assert.match(result.details.warning, /^Scope check: this looks project-specific, not "user" — use target "project"\./);
@@ -152,15 +157,83 @@ describe("registerMemoryTool", () => {
 
     it("stays quiet for genuine user preferences and for global/project targets", async () => {
       const tool = addTool();
-      const preference = await tool.execute("tc-1", { action: "add", target: "user", content: USER_PREFERENCE }, undefined, undefined, undefined);
+      const withKeywords = ["spaces", "tabs"];
+      const preference = await tool.execute("tc-1", { action: "add", target: "user", content: USER_PREFERENCE, keywords: withKeywords }, undefined, undefined, undefined);
       assert.strictEqual(preference.details.warning, undefined);
 
       // Global environment facts legitimately name paths and commands.
-      const global = await tool.execute("tc-2", { action: "add", target: "memory", content: PROJECT_SPECIFIC }, undefined, undefined, undefined);
+      const global = await tool.execute("tc-2", { action: "add", target: "memory", content: PROJECT_SPECIFIC, keywords: withKeywords }, undefined, undefined, undefined);
       assert.strictEqual(global.details.warning, undefined);
 
-      const project = await tool.execute("tc-3", { action: "add", target: "project", content: PROJECT_SPECIFIC }, undefined, undefined, undefined);
+      const project = await tool.execute("tc-3", { action: "add", target: "project", content: PROJECT_SPECIFIC, keywords: withKeywords }, undefined, undefined, undefined);
       assert.strictEqual(project.details.warning, undefined);
+    });
+
+    it("warns when an add carries no keywords (retrieval matches keywords only)", async () => {
+      const tool = addTool();
+      const result = await tool.execute("tc-1", { action: "add", target: "memory", content: "SQLite holds all memory now." }, undefined, undefined, undefined);
+
+      assert.strictEqual(result.details.success, true, "the lint must never block the write");
+      assert.match(result.details.warning, /^No keywords: automatic retrieval will never surface this memory entry/);
+      assert.match(result.details.warning, /memory_replace \(keywords\)/);
+      const parsed = JSON.parse(result.content[0].text);
+      assert.match(parsed.warning, /No keywords/);
+
+      // An empty array is just as keywords-less.
+      const empty = await tool.execute("tc-2", { action: "add", target: "memory", content: "Another keyword-less entry.", keywords: [] }, undefined, undefined, undefined);
+      assert.match(empty.details.warning, /^No keywords:/);
+
+      const tagged = await tool.execute("tc-3", { action: "add", target: "memory", content: "SQLite holds all memory now.", keywords: ["sqlite", "memory"] }, undefined, undefined, undefined);
+      assert.strictEqual(tagged.details.warning, undefined);
+    });
+    it("lists every warning when both lints fire", async () => {
+      const tool = addTool();
+      const result = await tool.execute(
+        "tc-1",
+        { action: "add", target: "user", content: PROJECT_SPECIFIC, keywords: ["deploy"] },
+        undefined, undefined, undefined,
+      );
+      const noKeywords = await tool.execute("tc-2", { action: "add", target: "user", content: PROJECT_SPECIFIC }, undefined, undefined, undefined);
+
+      assert.match(result.details.warning, /^Scope check:/);
+      assert.match(noKeywords.details.warning, /^No keywords:/);
+      assert.strictEqual(noKeywords.details.warnings.length, 2, "scope + keywords warnings");
+      const view = memoryResultView(noKeywords);
+      assert.match(view.summary, /\(\+1 more\)/);
+      assert.match(view.expandedText, /Warning: No keywords:/);
+      assert.match(view.expandedText, /Warning: Scope check:/);
+    });
+
+    it("warns when a replace leaves the entry without keywords", async () => {
+      let captured: any;
+      const mockPi = {
+        registerTool: (def: any) => { if (def.name === "memory_replace") captured = def; },
+      } as unknown as ExtensionAPI;
+      const storeReporting = (keywords: unknown) => ({
+        replace: () => ({
+          success: true,
+          target: "memory",
+          entry_count: 1,
+          message: "Entry replaced.",
+          entry: "new text",
+          previous_entry: "old text",
+          keywords,
+        }),
+      }) as unknown as MemoryStore;
+
+      // No dbManager: keeps the sync-warning path out of this lint test.
+      registerMemoryTool(mockPi, storeReporting([]), null, null);
+      const keywordless = await captured.execute("tc-1", { target: "memory", old_text: "old", content: "new text" }, undefined, undefined, undefined);
+      assert.match(keywordless.details.warning, /^No keywords:/);
+
+      registerMemoryTool(mockPi, storeReporting(["sqlite"]), null, null);
+      const tagged = await captured.execute("tc-2", { target: "memory", old_text: "old", content: "new text" }, undefined, undefined, undefined);
+      assert.strictEqual(tagged.details.warning, undefined);
+
+      // The store cannot tell (multi-match replace) -> stay quiet instead of guessing.
+      registerMemoryTool(mockPi, storeReporting(undefined), null, null);
+      const unknown = await captured.execute("tc-3", { target: "memory", old_text: "old", content: "new text" }, undefined, undefined, undefined);
+      assert.strictEqual(unknown.details.warning, undefined);
     });
 
     it("warns on a user-profile replace too", async () => {
@@ -653,7 +726,8 @@ describe("registerMemoryTool", () => {
     } as unknown as DatabaseManager;
 
     registerMemoryTool(mockPi, mockStore, null, failingDbManager);
-    const result = await capturedResult.execute("tc-1", { action: "add", target: "memory", content: "Entry one" }, undefined as any, undefined as any, undefined as any);
+    // Keywords are passed so the only warning under test is the sync one.
+    const result = await capturedResult.execute("tc-1", { action: "add", target: "memory", content: "Entry one", keywords: ["one", "two"] }, undefined as any, undefined as any, undefined as any);
 
     const parsed = JSON.parse(result.content[0].text);
     assert.strictEqual(parsed.success, true);
@@ -797,7 +871,11 @@ describe("registerMemoryTool", () => {
     registerMemoryTool(mockPi, mockStore, null);
     await capturedResult.execute("tc-1", { action: "replace", target: "memory", content: "new", old_text: "old" }, undefined as any, undefined as any, undefined as any);
 
-    assert.deepStrictEqual(replaceArgs, ["memory", "old", "new"], "should pass target, old_text, content to store.replace");
+    assert.deepStrictEqual(
+      replaceArgs,
+      ["memory", "old", "new", undefined, { keywords: undefined }],
+      "should pass target, old_text, content (and keywords) to store.replace",
+    );
   });
 
   it("binds project identity from execute ctx.cwd instead of a factory snapshot", async () => {

@@ -26,7 +26,7 @@ import { getCurrentSessionId } from "../session-id.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import type { MemoryCategory, MemoryResult } from "../types.js";
 import { normalizeMemoryLookupText } from "../store/memory-lookup.js";
-import { buildScopeHintWarning, detectProjectScopeSignals } from "../store/scope-lint.js";
+import { buildMissingKeywordsWarning, buildScopeHintWarning, detectProjectScopeSignals } from "../store/scope-lint.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { memoryResultView } from "./tool-result-views.js";
 
@@ -179,6 +179,7 @@ async function syncReplaceToSqlite(
   newContent: string,
   dbManager: DatabaseManager | null,
   projectName?: string | null,
+  keywords?: string[],
 ): Promise<string | null> {
   if (!dbManager) return null;
 
@@ -189,6 +190,7 @@ async function syncReplaceToSqlite(
       content: newContent,
       target: sqliteTarget,
       project: sqliteProject,
+      keywords,
     });
 
     if (syncResult.matched === 0) {
@@ -468,9 +470,9 @@ export function registerMemoryTool(
       case "replace":
         if (!old_text) throw new Error("old_text is required for 'replace' action.");
         if (!content) throw new Error("content is required for 'replace' action.");
-        result = await store_.replace(target, old_text, content);
+        result = await store_.replace(target, old_text, content, undefined, { keywords });
         if (result.success && !syncHandled) {
-          syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName);
+          syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName, keywords);
         }
         break;
       case "remove":
@@ -500,6 +502,18 @@ export function registerMemoryTool(
       // project-scoped. Never blocks the write — it only reports the suspicion.
       const hint = detectProjectScopeSignals(content);
       if (hint) result = appendWarning(result, buildScopeHintWarning(hint, rawTarget));
+    }
+    // Retrieval matches the keywords column only, so a keyword-less entry is
+    // invisible to auto-retrieve/bash-retrieve. Non-blocking hint only.
+    const keywordless = action === "add"
+      ? !keywords || keywords.length === 0
+      // For replace the store reports the entry's keywords after the write:
+      // an empty array means the entry still has none (undefined = unknown).
+      : action === "replace"
+        && Array.isArray(result.keywords)
+        && result.keywords.length === 0;
+    if (result.success && keywordless) {
+      result = appendWarning(result, buildMissingKeywordsWarning(rawTarget));
     }
 
     return {
@@ -539,6 +553,17 @@ This action-specific tool accepts only the parameters listed in its schema.`;
     });
   };
 
+  const keywordList = Type.Optional(Type.Array(
+    Type.String({
+      description: "A keyword that should pull this entry when it later appears in a user prompt or a bash command (synonym / other language / inflection / file, command or package name).",
+    }),
+    {
+      description:
+        "3-8 keywords that retrieve this entry. Automatic retrieval (before user messages, on bash tool calls) matches keywords ONLY, "
+        + "so an entry saved without them is never surfaced automatically (memory_search still matches its content). "
+        + "Use the specific terms the user or the agent would really use for this fact, not generic words.",
+    },
+  ));
   const target = StringEnum(["memory", "user", "project", "failure"] as const, {
     description:
       "Memory scope. Use failure for failures, corrections, insights, and tool quirks. "
@@ -561,7 +586,7 @@ Add one durable entry. The target and content fields are required.`,
       content: Type.String({ description: "Entry content to save." }),
       category: Type.Optional(category),
       failure_reason: Type.Optional(Type.String({ description: "Why a failure occurred." })),
-      keywords: Type.Optional(Type.Array(Type.String({ description: "Search synonyms / equivalents / inflections (e.g. [index, indices, индекс])." }), { description: "Optional searchable keywords for the entry." })),
+      keywords: keywordList,
     }),
   );
   registerActionTool(
@@ -575,6 +600,7 @@ Replace one existing entry. The target, old_text, and content fields are require
       target,
       old_text: Type.String({ description: "Substring identifying the entry to replace." }),
       content: Type.String({ description: "Replacement entry content." }),
+      keywords: keywordList,
     }),
   );
   registerActionTool(

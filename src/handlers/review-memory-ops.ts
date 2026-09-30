@@ -465,7 +465,9 @@ export async function applyReviewOperations(
           skippedCount++;
           continue;
         }
-        result = await activeStore.replace(memoryTarget, op.old_text, op.content, options.signal);
+        result = await activeStore.replace(memoryTarget, op.old_text, op.content, options.signal, {
+          keywords: op.keywords,
+        });
         if (result.success) {
           appliedCount++;
           applied.push({ action: "replace", target: rawTarget, old_text: op.old_text, content: op.content });

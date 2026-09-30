@@ -58,6 +58,20 @@ describe("scope lint", () => {
     assert.ok(hint.matched[0].endsWith("…"));
   });
 
+  it("describes the missing-keywords warning with a self-contained first line", async () => {
+    const { buildMissingKeywordsWarning } = await import("../../src/store/scope-lint.js");
+    const warning = buildMissingKeywordsWarning("user");
+    const [gist, ...rest] = warning.split("\n");
+
+    assert.match(gist, /^No keywords: automatic retrieval will never surface this user entry — it matches keywords only\.$/);
+    assert.ok(gist.length <= 100, `gist too long for a one-line card: ${gist}`);
+    const detail = rest.join("\n");
+    assert.match(detail, /memory_search still finds it by content/);
+    assert.match(detail, /synonyms, other languages, inflections, file\/command\/package\/tool names/);
+    assert.match(detail, /Saved as requested/);
+    assert.match(detail, /memory_replace \(keywords\)/);
+  });
+
   it("describes the rule and says the write was not blocked", () => {
     const hint = detectProjectScopeSignals(deployContract);
     assert.ok(hint);
@@ -73,12 +87,39 @@ describe("scope lint", () => {
   });
 });
 
-describe("scope guidance text", () => {
-  it("states the rule in the tool description", async () => {
+describe("scope and keywords guidance text", () => {
+  it("states the rules in the tool description", async () => {
     const { MEMORY_TOOL_DESCRIPTION } = await import("../../src/constants.js");
     assert.match(MEMORY_TOOL_DESCRIPTION, /SCOPE RULE -- classify by DOMAIN, not by the speech act/);
     assert.match(MEMORY_TOOL_DESCRIPTION, /even when it was phrased as a standing user instruction/);
     assert.match(MEMORY_TOOL_DESCRIPTION, /"if I switched to another repository, would this still be true\?" No -> "project"/);
+    assert.match(MEMORY_TOOL_DESCRIPTION, /KEYWORDS -- they drive automatic retrieval/);
+    assert.match(MEMORY_TOOL_DESCRIPTION, /matches the keywords column ONLY/);
+  });
+
+  it("tells every extraction prompt that retrieval matches keywords only", async () => {
+    const {
+      COMBINED_REVIEW_PROMPT,
+      DIRECT_REVIEW_SYSTEM_PROMPT,
+      DIRECT_FLUSH_SYSTEM_PROMPT,
+      DIRECT_CORRECTION_SYSTEM_PROMPT,
+      DIRECT_CONSOLIDATION_SYSTEM_PROMPT,
+    } = await import("../../src/constants.js");
+
+    for (const [name, prompt] of Object.entries({
+      COMBINED_REVIEW_PROMPT,
+      DIRECT_REVIEW_SYSTEM_PROMPT,
+      DIRECT_FLUSH_SYSTEM_PROMPT,
+      DIRECT_CORRECTION_SYSTEM_PROMPT,
+    })) {
+      assert.match(prompt, /keywords/i, `${name} must mention keywords`);
+      assert.match(prompt, /matches keywords ONLY|matches the keywords column ONLY/i, `${name} must state the retrieval rule`);
+    }
+    // Consolidation must not merge keywords away.
+    assert.match(DIRECT_CONSOLIDATION_SYSTEM_PROMPT, /Every "add" operation MUST carry 3-8 `keywords`/);
+    // The embedded operation schema describes the field for review/flush/correction.
+    assert.match(DIRECT_REVIEW_SYSTEM_PROMPT, /keywords: 3-8 terms that should retrieve this entry/);
+    assert.match(DIRECT_REVIEW_SYSTEM_PROMPT, /so an add or replace without them is never auto-retrieved/);
   });
 
   it("states the rule in the background review / flush / correction routing guidance", async () => {

@@ -779,6 +779,8 @@ export function replaceSyncedMemories(
     content: string;
     target: 'memory' | 'user' | 'failure';
     project?: string | null;
+    /** Replacement keywords; omitted keeps the row's current keywords. */
+    keywords?: string[] | null;
     category?: MemoryCategory | null;
     failureReason?: string | null;
     toolState?: string | null;
@@ -824,6 +826,7 @@ export function replaceSyncedMemories(
     db.prepare(`
       UPDATE memories
       SET content = ?,
+          keywords = ?,
           category = ?,
           failure_reason = ?,
           tool_state = ?,
@@ -832,6 +835,7 @@ export function replaceSyncedMemories(
       WHERE id = ?
     `).run(
       updates.content.trim(),
+      updates.keywords && updates.keywords.length > 0 ? serializeKeywords(updates.keywords) : row.keywords,
       updates.category === undefined ? row.category : updates.category,
       updates.failureReason === undefined ? row.failure_reason : normalizeNullable(updates.failureReason),
       updates.toolState === undefined ? row.tool_state : normalizeNullable(updates.toolState),

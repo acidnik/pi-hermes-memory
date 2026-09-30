@@ -30,11 +30,12 @@ function firstText(...values: unknown[]): string | null {
   return null;
 }
 
-function warningText(data: Record<string, any>): string | null {
-  const warnings = Array.isArray(data.warnings)
-    ? data.warnings.filter((value: unknown) => typeof value === "string" && value.trim())
-    : [];
-  return firstText(data.warning, ...warnings);
+/** Every warning a result carries, in the order the producers added them. */
+function warningList(data: Record<string, any>): string[] {
+  const collected = stringList(data.warnings);
+  const single = firstText(data.warning);
+  if (single && !collected.includes(single)) collected.unshift(single);
+  return collected;
 }
 
 function stringList(value: unknown): string[] {
@@ -123,7 +124,7 @@ export function memoryResultView(result: unknown): SharedOutputView {
   const previous = firstText(data.previous_entry);
   const removed = firstText(data.removed_entry);
   const entryCount = typeof data.entry_count === "number" ? data.entry_count : undefined;
-  const warning = warningText(data);
+  const warnings = warningList(data);
   // An add-shaped result reports the entry that is now stored; replace/remove
   // report the previous text instead. Only adds always show a keywords line.
   const added = entry !== null && previous === null && removed === null;
@@ -137,7 +138,10 @@ export function memoryResultView(result: unknown): SharedOutputView {
   if (evicted > 0) parts.push(`evicted: ${evicted}`);
   if (entryCount !== undefined) parts.push(countLabel(entryCount, "entry", "entries"));
   // The collapsed line carries only the gist; the full text stays in the expansion.
-  if (warning) parts.push(`Warning: ${collapsedWarning(warning)}`);
+  if (warnings.length > 0) {
+    const more = warnings.length > 1 ? ` (+${warnings.length - 1} more)` : "";
+    parts.push(`Warning: ${collapsedWarning(warnings[0])}${more}`);
+  }
 
   const lines = [primaryMessage || `${outcome}.`];
   const meta = [`target: ${target ?? "?"}`, `scope=${scopeLabel(project)}`];
@@ -152,7 +156,7 @@ export function memoryResultView(result: unknown): SharedOutputView {
     lines.push("", `Rotated out ${countLabel(evictedEntries.length, "entry", "entries")}:`);
     for (const item of evictedEntries) lines.push(`  ${item}`);
   }
-  if (warning) lines.push("", `Warning: ${warning}`);
+  for (const item of warnings) lines.push("", `Warning: ${item}`);
 
   return { ...base, status: "success", summary: parts.join(" · "), expandedText: lines.join("\n") };
 }
