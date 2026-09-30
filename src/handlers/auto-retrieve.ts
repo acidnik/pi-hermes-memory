@@ -125,7 +125,7 @@ export function buildRetrievalDetails(
       target: entry.target,
       project: entry.project,
       category: entry.category,
-      content: entry.content.length > 500 ? `${entry.content.slice(0, 500)}…` : entry.content,
+      content: entry.content,
       matchedTerms: entry.matchedTerms?.slice() ?? [],
     })),
   };
@@ -146,7 +146,7 @@ export function pruneAutoRetrievalRows(dbManager: DatabaseManager): void {
   try { pruneRetrievalRows(dbManager, RETRIEVAL_PRUNE_MAX_AGE_MS); } catch { /* best effort */ }
 }
 
-function scopeLabel(entry: RetrievalEntryView): string {
+function scopeLabel(entry: Pick<RetrievalEntryView, "target" | "project" | "category">): string {
   if (entry.target === "failure") {
     return entry.category ? `failure:${entry.category}` : "failure";
   }
@@ -154,8 +154,35 @@ function scopeLabel(entry: RetrievalEntryView): string {
   return entry.target;
 }
 
-function formatLine(entry: RetrievalEntryView): string {
-  return `- [${scopeLabel(entry)}] ${entry.content}`;
+/** How much of the "why" annotation is echoed per injected entry. */
+const MAX_MATCHED_TERMS_SHOWN = 3;
+const MAX_KEYWORDS_SHOWN = 8;
+
+/**
+ * Model-facing annotation: which query terms matched this entry and which
+ * keywords it carries. Both are needed to act on a wrong match in the same
+ * turn ("matched via the over-broad keyword X" -> memory_replace keywords).
+ */
+export function formatRetrievalAnnotation(
+  entry: { keywords?: string[] | null; matchedTerms?: string[] | null },
+): string {
+  const parts: string[] = [];
+  const matched = (entry.matchedTerms ?? [])
+    .map((term) => term.trim())
+    .filter((term) => term.length > 0)
+    .slice(0, MAX_MATCHED_TERMS_SHOWN);
+  if (matched.length > 0) parts.push(`matched: ${matched.join(", ")}`);
+  const keywords = (entry.keywords ?? [])
+    .map((term) => term.trim())
+    .filter((term) => term.length > 0)
+    .slice(0, MAX_KEYWORDS_SHOWN);
+  if (keywords.length > 0) parts.push(`keys: ${keywords.join(", ")}`);
+  return parts.length > 0 ? ` (${parts.join(" · ")})` : "";
+}
+
+/** One injected line: scope, why it matched, and the entry text in full. */
+export function formatRetrievalLine(entry: SqliteMemoryEntry): string {
+  return `- [${scopeLabel(entry)}]${formatRetrievalAnnotation(entry)} ${entry.content}`;
 }
 
 /** Keywords shown in the collapsed header — falls back to leading words. */
@@ -180,17 +207,16 @@ function keywordPreview(entries: SqliteMemoryEntry[]): string {
   return words.join(", ");
 }
 
-/** The text block the model receives (custom message content). */
-function renderRetrievalBlock(entries: SqliteMemoryEntry[]): string {
+/**
+ * The text block the model receives (custom message content). Entries are NOT
+ * truncated: the model must see the whole fact to be able to rewrite it, and the
+ * `maxChars` budget already bounds how many entries are injected.
+ */
+export function renderRetrievalBlock(entries: SqliteMemoryEntry[], subject = "your message"): string {
   return [
     "<retrieved-memory>",
-    "The following durable memories match your message:",
-    ...entries.map((entry) => formatLine({
-      target: entry.target,
-      project: entry.project,
-      category: entry.category,
-      content: entry.content.length > 300 ? `${entry.content.slice(0, 300)}…` : entry.content,
-    })),
+    `The following durable memories match ${subject}:`,
+    ...entries.map(formatRetrievalLine),
     "</retrieved-memory>",
   ].join("\n");
 }

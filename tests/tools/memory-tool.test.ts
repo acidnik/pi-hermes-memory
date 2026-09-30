@@ -878,6 +878,55 @@ describe("registerMemoryTool", () => {
     );
   });
 
+  it("re-tags without content when only keywords are given", async () => {
+    let capturedResult: any;
+    let retagArgs: any[] | undefined;
+    let replaceCalls = 0;
+
+    const mockPi = {
+      registerTool: (def: any) => {
+        if (def.name === "memory_replace") capturedResult = def;
+      },
+    } as unknown as ExtensionAPI;
+
+    const mockStore = {
+      replace: (..._args: any[]) => {
+        replaceCalls++;
+        return { success: true, target: "memory", entry_count: 1, message: "Entry replaced." };
+      },
+      retag: (...args: any[]) => {
+        retagArgs = args;
+        return {
+          success: true,
+          target: "memory",
+          entry_count: 1,
+          message: "Entry re-tagged.",
+          entry: "the fact",
+          previous_entry: "the fact",
+          keywords: ["sqlite", "keys"],
+        };
+      },
+    } as unknown as MemoryStore;
+
+    registerMemoryTool(mockPi, mockStore, null, null);
+    const retagged = await capturedResult.execute(
+      "tc-1",
+      { target: "memory", old_text: "the fact", keywords: ["sqlite", "keys"] },
+      undefined as any, undefined as any, undefined as any,
+    );
+
+    assert.deepStrictEqual(retagArgs, ["memory", "the fact", ["sqlite", "keys"]]);
+    assert.strictEqual(replaceCalls, 0, "a keyword-only edit must not rewrite the entry text");
+    assert.equal(retagged.details.success, true);
+    assert.equal(retagged.details.warning, undefined, "re-tagged entries keep keywords, so no lint");
+
+    // Neither content nor keywords -> the action is under-specified.
+    await assert.rejects(
+      () => capturedResult.execute("tc-2", { target: "memory", old_text: "the fact" }, undefined as any, undefined as any, undefined as any),
+      /keywords.*required for 'replace' action/,
+    );
+  });
+
   it("binds project identity from execute ctx.cwd instead of a factory snapshot", async () => {
     let capturedResult: any;
     const boundCwds: string[] = [];

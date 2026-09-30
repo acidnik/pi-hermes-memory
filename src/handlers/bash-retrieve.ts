@@ -30,6 +30,7 @@ import {
   RETRIEVAL_MESSAGE_TYPE,
   renderRetrievalMessage,
   buildRetrievalDetails,
+  renderRetrievalBlock,
 } from "./auto-retrieve.js";
 import { searchMemories, type SqliteMemoryEntry } from "../store/sqlite-memory-store.js";
 import {
@@ -139,25 +140,12 @@ export function extractCommandTerms(command: string): string[] {
   return terms;
 }
 
-function scopeLabel(entry: SqliteMemoryEntry): string {
-  if (entry.target === "failure") {
-    return entry.category ? `failure:${entry.category}` : "failure";
-  }
-  if (entry.target === "memory" && entry.project) return `project:${entry.project}`;
-  return entry.target;
-}
-
-/** The text block appended to the tool result the model sees. */
+/**
+ * The text block appended after the bash tool output — the same renderer as
+ * auto-retrieve with a different subject line. Entries are not truncated.
+ */
 export function renderBashRetrieveBlock(entries: SqliteMemoryEntry[]): string {
-  return [
-    "<retrieved-memory>",
-    "The following durable memories match the command you just ran:",
-    ...entries.map((entry) => {
-      const content = entry.content.length > 300 ? `${entry.content.slice(0, 300)}…` : entry.content;
-      return `- [${scopeLabel(entry)}] ${content}`;
-    }),
-    "</retrieved-memory>",
-  ].join("\n");
+  return renderRetrievalBlock(entries, "the command you just ran");
 }
 
 function sessionIdOf(ctx: ExtensionContext): string | undefined {

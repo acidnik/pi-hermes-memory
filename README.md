@@ -154,7 +154,7 @@ Start a **new session** and ask:
 
 > Use memory_search to recall my project codename.
 
-Use `memory_replace` to update a saved fact and `memory_remove` to delete it.
+Use `memory_replace` to update a saved fact and `memory_remove` to delete it. To change only the retrieval keywords of an entry (the text stays verbatim), call `memory_replace` with `old_text` + `keywords` and no `content`.
 The package manages its own memory files and SQLite store under
 `$DSH_HOME/pi2dsh/agent/` (with the default DSH home when `DSH_HOME` is unset).
 For the headless CLI, install into `--profile headless` instead of `web`.
@@ -192,6 +192,8 @@ Saved facts carry **keywords** — the terms that should pull that entry when th
 **Automatic retrieval matches keywords only.** `autoRetrieve` and `bashRetrieve` restrict every FTS match to the keywords column (`keywordsOnly`, default `true`), so an entry saved without keywords is never surfaced that way — `memory_search` still finds it by content. Two consequences, both surfaced in the tool card as non-blocking warnings: an `add` (or a `replace` of a keyword-less entry) that ends up with no keywords gets a "No keywords" hint, and long gaps are easy to spot. `memory_replace` accepts `keywords`, so an entry can be re-tagged without a remove+add round trip; omitting them keeps the entry's existing keywords.
 
 With `autoRetrieve` enabled, each user message is FTS5-searched and the top matches are delivered to the model as a separate custom message (never glued into the message you typed). The transcript shows it collapsed — entry count plus a few keywords — and the standard expand key (`app.tools.expand`, default `ctrl+o`) reveals the full block. Only the current project's memories and global ones are considered, and each fact is injected at most once per session.
+
+The injected block itself is self-describing and **not truncated** — each line is `- [scope] (matched: <query terms that hit> · keys: <the entry's keywords>) <entry text in full>`, so the model can see *why* an entry surfaced, which keywords it carries, and the whole fact. That is what makes pro-active curation possible: an entry injected for the wrong reason (an over-broad keyword, a stale fact, the wrong scope) can be re-tagged or removed in the same turn with `memory_replace` (keyword-only form) or `memory_remove`. `memory_search` prints the same `keys:` list on each result.
 
 With `bashRetrieve` enabled, the model's **bash tool calls** trigger memory search: the command text is reduced to search terms (command names, relative paths and filenames; `-`-flags and `/`-prefixed absolute paths are discarded), and the top matches are delivered as a **separate custom message** right after the tool output — the bash tool result itself is left untouched, and the transcript shows the same collapsible `🧠 Retrieved N entries` block (expand with `app.tools.expand` / `ctrl+o`) as auto-retrieve. This surfaces facts about the exact commands, files and tools the model is touching — e.g. "never run SQLite migrations while the API is live" when it greps migration files. Scope is the same as auto-retrieve (active project + global), and dedup is **shared with auto-retrieve**: each row is injected at most once per session across both features (cleared after context compaction), so repeated commands like `npm run check` do not re-inject the same facts.
 
@@ -281,8 +283,8 @@ The agent gets action-specific memory tools it can call proactively:
 
 | Tool | Required fields | What it does |
 |---|---|---|
-| `memory_add` | `target`, `content` | Append a new durable entry |
-| `memory_replace` | `target`, `old_text`, `content` | Update an existing entry matched by substring |
+| `memory_add` | `target`, `content` | Append a new durable entry (`keywords` recommended: see below) |
+| `memory_replace` | `target`, `old_text`, `content` | Update an existing entry matched by substring; omit `content` to change only `keywords` |
 | `memory_remove` | `target`, `old_text` | Delete an existing entry matched by substring |
 
 Targets are `memory`, `user`, `project`, and `failure`. Failure writes may also include `category` and `failure_reason`.

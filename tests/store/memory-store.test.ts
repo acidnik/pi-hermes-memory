@@ -214,6 +214,20 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const raw = store.getRawEntriesForSync("memory").find((entry) => entry.includes("keyworded fact v3"));
       assert.ok(raw, "replaced entry exists");
       assert.match(raw!, /keys=beta, бета/, "new keywords land in the entry metadata");
+
+      // Re-tag: the text stays verbatim, only the keywords change.
+      const retagged = await store.retag("memory", `${TEST_MARKER} keyworded fact v3`, ["gamma", "гамма"]);
+      assert.ok(retagged.success);
+      assert.equal(retagged.message, "Entry re-tagged.");
+      assert.deepStrictEqual(retagged.keywords, ["gamma", "гамма"]);
+      assert.deepStrictEqual(store.getMemoryEntries(), [`${TEST_MARKER} keyworded fact v3`]);
+      const rawRetag = store.getRawEntriesForSync("memory").find((entry) => entry.includes("keyworded fact v3"));
+      assert.match(rawRetag!, /keys=gamma, гамма/, "re-tag writes the new keyword metadata");
+
+      // An empty list is refused: the entry would drop out of automatic retrieval.
+      const emptied = await store.retag("memory", `${TEST_MARKER} keyworded fact v3`, []);
+      assert.equal(emptied.success, false);
+      assert.match(emptied.error!, /at least one keyword/);
     });
 
     it("no-ops on duplicate entry and returns message", async () => {

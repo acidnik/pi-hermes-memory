@@ -57,6 +57,16 @@ The implementation is ported from the Hermes agent harness. See `PLAN.md` → "H
 
 **Before starting any work, read `docs/0.2/TASKS.md` to see what's next.**
 
+## Fork conventions (acidnik fork)
+
+This checkout is a **private fork** (upstream patches are not sent any more):
+
+- **Work directly on `main`** — no feature branches for routine tasks; commit straight to `main`.
+- **Commit only when asked.** `commit` / `коммит` in the same message = commit to `main`; `push` / `deploy` additionally pushes. "Коммит и локальный апдейт" means: commit, then refresh the install clone without pushing.
+- **Local install refresh** (no push, no `pi update`): in `~/.pi/agent/git/github.com/acidnik/pi-hermes-memory` run `git fetch <this repo> main && git merge --ff-only FETCH_HEAD`, then `/reload` in pi. `pi update` resets that clone to `origin/main` and would drop the local commits.
+- **`pi-hermes-memory-plan.md`** (repo root, untracked) is the running task log — append DONE entries there, never commit it.
+- Before committing: `node_modules/.bin/tsc --noEmit` and the full suite (`tests/run-all.sh`).
+
 ## Development
 
 ```bash

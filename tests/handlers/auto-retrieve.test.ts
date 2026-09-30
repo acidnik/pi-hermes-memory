@@ -180,7 +180,13 @@ describe("auto-retrieve", () => {
     assert.equal(message.display, true);
     assert.ok(message.content.includes("<retrieved-memory>"));
     assert.ok(message.content.includes("deployment runs on kubernetes"));
-    assert.ok(message.content.includes("[project:project-a] current project uses a monorepo"));
+    const projectLine = message.content.split("\n").find((line) => line.startsWith("- [project:project-a]")) ?? "";
+    assert.ok(projectLine, `the project entry is injected: ${message.content}`);
+    assert.match(projectLine, /\(matched: [^)]*kubernetes[^)]*·\s*keys: monorepo, kubernetes, layout\)/);
+    assert.ok(
+      projectLine.endsWith("current project uses a monorepo kubernetes layout"),
+      "the entry text is injected verbatim (untruncated)",
+    );
     assert.ok(!message.content.includes("other project hides secrets"), "other projects are excluded");
 
     const details = message.details as { count: number; keywords: string; entries: unknown[] };

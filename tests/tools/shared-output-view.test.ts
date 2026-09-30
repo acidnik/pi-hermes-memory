@@ -350,6 +350,31 @@ describe("tool-specific summaries", () => {
     assert.match(removed.expandedText, /target: memory · scope=global · 2 entries\n\nremoved:\ntext that went away/);
   });
 
+  it("renders a keyword-only re-tag without echoing the unchanged text", () => {
+    const view = memoryResultView(result(JSON.stringify({ success: true }), {
+      success: true,
+      message: "Entry re-tagged.",
+      target: "memory",
+      entry_count: 3,
+      entry: "the same text",
+      previous_entry: "the same text",
+      keywords: ["sqlite", "keys"],
+    }));
+
+    assert.equal(view.summary, "Retagged · target: memory · keys: sqlite, keys · 3 entries");
+    assert.equal(
+      view.expandedText,
+      [
+        "Entry re-tagged.",
+        "target: memory · scope=global · 3 entries",
+        "keys: sqlite, keys",
+        "",
+        "the same text",
+      ].join("\n"),
+    );
+    assert.doesNotMatch(view.expandedText, /was:/, "an unchanged entry text is not echoed as a replacement");
+  });
+
   it("renders failures with the hint and the matching entries", () => {
     const view = memoryResultView(result(JSON.stringify({ success: false }), {
       success: false,

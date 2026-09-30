@@ -469,9 +469,15 @@ export function registerMemoryTool(
         break;
       case "replace":
         if (!old_text) throw new Error("old_text is required for 'replace' action.");
-        if (!content) throw new Error("content is required for 'replace' action.");
-        result = await store_.replace(target, old_text, content, undefined, { keywords });
-        if (result.success && !syncHandled) {
+        // Without content this is a re-tag: the entry keeps its text and only
+        // its keywords change (safe path for curating an injected entry).
+        if (!content && (!keywords || keywords.length === 0)) {
+          throw new Error("content (or, for a keyword-only re-tag, keywords) is required for 'replace' action.");
+        }
+        result = content
+          ? await store_.replace(target, old_text, content, undefined, { keywords })
+          : await store_.retag(target, old_text, keywords ?? []);
+        if (result.success && content && !syncHandled) {
           syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName, keywords);
         }
         break;
@@ -595,11 +601,16 @@ Add one durable entry. The target and content fields are required.`,
     "Memory Replace",
     `${commonDescription}
 
-Replace one existing entry. The target, old_text, and content fields are required.`,
+Replace one existing entry. Pass content to rewrite it, or keywords alone to
+re-tag it: without content the entry keeps its text verbatim and only its
+keywords change (use that to fix an entry that was injected for the wrong
+reason — an over-broad keyword, a wrong scope label — without touching the
+fact). The target and old_text fields are always required; keywords alone are
+enough without content.`,
     Type.Object({
       target,
       old_text: Type.String({ description: "Substring identifying the entry to replace." }),
-      content: Type.String({ description: "Replacement entry content." }),
+      content: Type.Optional(Type.String({ description: "Replacement entry content. Omit to change only the keywords." })),
       keywords: keywordList,
     }),
   );

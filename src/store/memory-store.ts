@@ -630,12 +630,52 @@ export class MemoryStore {
     );
   }
 
+  /**
+   * Rewrite ONLY the keywords of the matched entry, keeping its text verbatim.
+   * Backs `memory_replace` without `content`: an entry that was injected for the
+   * wrong reason can be re-tagged in one call, with no risk of mangling the fact.
+   */
+  async retag(
+    target: "memory" | "user" | "failure",
+    oldText: string,
+    keywords: string[],
+    signal?: AbortSignal,
+  ): Promise<MemoryResult> {
+    const cleaned = (keywords ?? []).map((item) => item.trim()).filter(Boolean);
+    if (cleaned.length === 0) {
+      return {
+        success: false,
+        error: "Re-tagging needs at least one keyword: retrieval matches keywords only, so an entry without keywords is never surfaced automatically.",
+      };
+    }
+    return this.runTargetMutation(
+      target,
+      async (markMutation) => {
+        const lookup = normalizeMemoryLookupText(oldText);
+        if (!lookup) return { success: false, error: "old_text cannot be empty." };
+        const matches = this.entriesFor(target).filter((entry) => this.stripMetadata(entry).includes(lookup));
+        if (matches.length === 0) return { success: false, error: `No entry matched '${lookup}'.` };
+        if (matches.length > 1 && !this.areDistinctScopedFailureCopies(target, matches)) {
+          return {
+            success: false,
+            error: `Multiple entries matched '${lookup}'. Be more specific.`,
+            matches: matches.map((entry) => this.stripMetadata(entry).slice(0, 80) + (entry.length > 80 ? "..." : "")),
+          };
+        }
+        // Same text, new keywords — replaceUnlocked keeps created/project/session.
+        return this.replaceUnlocked(target, lookup, this.stripMetadata(matches[0]), markMutation, cleaned, "Entry re-tagged.");
+      },
+      signal,
+    );
+  }
+
   private async replaceUnlocked(
     target: "memory" | "user" | "failure",
     oldText: string,
     newContent: string,
     markMutation: () => void,
     keywords?: string[],
+    message = "Entry replaced.",
   ): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     newContent = newContent.trim();
@@ -687,7 +727,7 @@ export class MemoryStore {
     const previousEntry = matches.map((entry) => this.stripMetadata(entry)).join("\n");
     const previousDecoded = matches.length === 1 ? this.decodeEntry(matches[0]) : undefined;
     return {
-      ...this.successResponse(target, "Entry replaced."),
+      ...this.successResponse(target, message),
       // Display-only context (stripped from the model-facing tool payload).
       entry: newContent,
       previous_entry: previousEntry,

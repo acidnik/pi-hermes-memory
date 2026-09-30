@@ -66,6 +66,27 @@ describe('registerMemorySearchTool', () => {
     dbManager.close();
   });
 
+  it('shows the entry keyword list so it can be curated', async () => {
+    const dbManager = makeDbManager();
+    addMemory(
+      dbManager,
+      'sqlite holds every memory row',
+      'memory',
+      null, null, null, null, null,
+      undefined,
+      undefined,
+      ['sqlite', 'sessions.db'],
+    );
+
+    let captured: any;
+    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+
+    const text = (await captured.execute('tc-1', { query: 'sqlite' })).content[0].text;
+    assert.match(text, /Created: \d{4}-\d{2}-\d{2} \| Last used: \d{4}-\d{2}-\d{2} \| keys: sqlite, sessions\.db/);
+
+    dbManager.close();
+  });
+
   it('accepts target "project" as a filter and shows the schema value', async () => {
     const dbManager = makeDbManager();
     addMemory(dbManager, 'project deployment convention', 'memory', 'project-a');

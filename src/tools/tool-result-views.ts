@@ -107,11 +107,13 @@ export function memoryResultView(result: unknown): SharedOutputView {
     ? "Saved"
     : /^Entry replaced\.$/.test(primaryMessage)
       ? "Replaced"
-      : /^Entry removed\.$/.test(primaryMessage)
-        ? "Removed"
-        : /^Entry already exists/.test(primaryMessage)
-          ? "Unchanged"
-          : "Updated";
+      : /^Entry re-tagged\.$/.test(primaryMessage)
+        ? "Retagged"
+        : /^Entry removed\.$/.test(primaryMessage)
+          ? "Removed"
+          : /^Entry already exists/.test(primaryMessage)
+            ? "Unchanged"
+            : "Updated";
   const target = firstText(data.target);
   const project = firstText(data.project);
   const category = typeof data.category === "string" && data.category.trim()
@@ -150,7 +152,8 @@ export function memoryResultView(result: unknown): SharedOutputView {
   lines.push(meta.join(" · "));
   if (showKeywords) lines.push(keywordsLine);
   if (entry) lines.push("", entry);
-  if (previous) lines.push("", "was:", previous);
+  // A re-tag keeps the text, so echoing "was:" would just repeat the entry.
+  if (previous && previous !== entry) lines.push("", "was:", previous);
   if (removed) lines.push("", "removed:", removed);
   if (evictedEntries.length > 0) {
     lines.push("", `Rotated out ${countLabel(evictedEntries.length, "entry", "entries")}:`);

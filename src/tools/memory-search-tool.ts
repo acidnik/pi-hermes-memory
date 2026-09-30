@@ -87,7 +87,10 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
         const targetLabel = entry.target === 'user' ? '👤' : entry.target === 'failure' ? '⚠️' : '🧠';
         const categoryLabel = entry.category ? ` [${entry.category}]` : '';
         output += `${targetLabel} ${projectLabel} ${mutationTargetLabel}${categoryLabel} ${entry.content}\n`;
-        output += `   Created: ${entry.created} | Last used: ${entry.lastReferenced}\n\n`;
+        const keywords = (entry.keywords ?? []).join(", ");
+        output += `   Created: ${entry.created} | Last used: ${entry.lastReferenced}`
+          + (keywords ? ` | keys: ${keywords}` : "")
+          + "\n\n";
       }
 
       const finalResult: SearchResult = { success: true, count: results.length, output: output.trim() };

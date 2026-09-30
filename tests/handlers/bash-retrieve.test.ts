@@ -210,12 +210,23 @@ describe("renderBashRetrieveBlock", () => {
         target: "failure",
         category: "correction",
       }).entry,
+      syncMemoryEntry(dbManager, {
+        content: `long entry ${"x".repeat(400)}`,
+        target: "memory",
+        project: null,
+        keywords: ["overflow", "truncation"],
+      }).entry,
     ]);
     assert.ok(block.startsWith("<retrieved-memory>"));
     assert.ok(block.endsWith("</retrieved-memory>"));
     assert.ok(block.includes("- [memory] npm run build"));
     assert.ok(block.includes("- [project:project-a] api lives"));
     assert.ok(block.includes("- [failure:correction] never migrate"));
+    // Entries with keywords carry the annotation; keyword-less ones stay plain.
+    assert.ok(block.includes("- [memory] (keys: overflow, truncation) long entry"), block);
+    // The full text is injected — no 300-char truncation any more.
+    assert.ok(block.includes("x".repeat(400)), "long entries are injected untruncated");
+    assert.ok(!block.includes("…"), "nothing is elided");
   });
 });
 
