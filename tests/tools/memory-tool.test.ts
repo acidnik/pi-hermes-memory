@@ -118,6 +118,71 @@ describe("registerMemoryTool", () => {
     assert.strictEqual(result.details.entry, "the saved text");
   });
 
+  describe("scope lint for user-profile writes", () => {
+    // The live mis-scoping: a per-repo release contract saved to the user profile.
+    const PROJECT_SPECIFIC = 'Standing release contract for pi-better-paste-markers (/home/nik/src/pi-better-paste-markers): '
+      + 'when Nik says "deploy", compare the local package.json version vs `npm view pi-better-paste-markers version`, '
+      + 'then `npm publish` unattended.';
+    const USER_PREFERENCE = "Nik prefers tabs over spaces and short commit messages.";
+
+    function addTool(): any {
+      let captured: any;
+      const mockPi = {
+        registerTool: (def: any) => { if (!captured || def.name === "memory_add") captured = def; },
+      } as unknown as ExtensionAPI;
+      const mockStore = {
+        add: () => ({ success: true, target: "user", entry_count: 1, message: "Entry added." }),
+      } as unknown as MemoryStore;
+      registerMemoryTool(mockPi, mockStore, null, dbManager);
+      return captured;
+    }
+
+    it("warns (without blocking) when a user write looks project-specific", async () => {
+      const tool = addTool();
+      const result = await tool.execute("tc-1", { action: "add", target: "user", content: PROJECT_SPECIFIC }, undefined, undefined, undefined);
+
+      assert.strictEqual(result.details.success, true, "the lint must never block the write");
+      assert.match(result.details.warning, /^Scope check: this looks project-specific, not "user" — use target "project"\./);
+      assert.match(result.details.message, /Entry added\. Warning: Scope check/);
+      assert.deepStrictEqual(result.details.warnings.length, 1);
+      // The hint is model-facing on purpose: it has to change the next decision.
+      const parsed = JSON.parse(result.content[0].text);
+      assert.match(parsed.warning, /Scope check/);
+    });
+
+    it("stays quiet for genuine user preferences and for global/project targets", async () => {
+      const tool = addTool();
+      const preference = await tool.execute("tc-1", { action: "add", target: "user", content: USER_PREFERENCE }, undefined, undefined, undefined);
+      assert.strictEqual(preference.details.warning, undefined);
+
+      // Global environment facts legitimately name paths and commands.
+      const global = await tool.execute("tc-2", { action: "add", target: "memory", content: PROJECT_SPECIFIC }, undefined, undefined, undefined);
+      assert.strictEqual(global.details.warning, undefined);
+
+      const project = await tool.execute("tc-3", { action: "add", target: "project", content: PROJECT_SPECIFIC }, undefined, undefined, undefined);
+      assert.strictEqual(project.details.warning, undefined);
+    });
+
+    it("warns on a user-profile replace too", async () => {
+      let captured: any;
+      const mockPi = {
+        registerTool: (def: any) => { if (!captured || def.name === "memory_replace") captured = def; },
+      } as unknown as ExtensionAPI;
+      const mockStore = {
+        replace: () => ({ success: true, target: "user", entry_count: 1, message: "Entry replaced." }),
+      } as unknown as MemoryStore;
+      registerMemoryTool(mockPi, mockStore, null, dbManager);
+
+      const result = await captured.execute(
+        "tc-1",
+        { target: "user", old_text: "release contract", content: PROJECT_SPECIFIC },
+        undefined, undefined, undefined,
+      );
+      assert.strictEqual(result.details.success, true);
+      assert.match(result.details.warning, /^Scope check:/);
+    });
+  });
+
   it("execute add with FIFO evictions returns normal text with full rotated entries", async () => {
     let capturedResult: any;
 

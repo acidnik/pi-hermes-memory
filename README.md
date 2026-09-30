@@ -364,11 +364,14 @@ This lets Pi discover project skills as native skills without copying them into 
 
 | Store | Storage | What goes here | Limit |
 |---|---|---|---|
-| **memory** | `sessions.db` | Agent's notes — env facts, project conventions, tool quirks, lessons learned | No size limit |
-| **user** | `sessions.db` | User profile — name, preferences, communication style, habits | No size limit |
+| **memory** | `sessions.db` | Cross-project notes — environment facts, tool quirks, durable lessons | No size limit |
+| **user** | `sessions.db` | User profile — name, preferences, communication style, habits (true in every project) | No size limit |
+| **project** | `sessions.db` (project-scoped rows) | Facts tied to one repo — architecture, commands, package manager, release steps | No size limit |
 | **skills** | `~/.pi/agent/pi-hermes-memory/skills/<slug>/SKILL.md` or `projects-memory/<project>/skills/<slug>/SKILL.md` | Procedures — *how* to debug, deploy, test, or fix something | Unlimited |
 | **failure** | `sessions.db` | Failures, corrections, insights, conventions, tool quirks | No size limit |
 | **sessions** | `sessions.db` | Past conversation history (searchable via FTS5) | Unlimited |
+
+**Choosing a target:** classify by domain, not by how the fact was phrased. If it names a repo, path, package, command, branch or host, it belongs to `project` — even when it sounds like a standing instruction ("when I say deploy, do X"). `user` is only for facts that stay true in **every** project; `memory` is for cross-project environment and tool notes. Split facts that mix both. When a `user` write looks project-specific (`/home/...`, a forge URL, `@scope/pkg`, an `npm publish`-style command, or two weaker signals), the tool card says so with a non-blocking warning that points at `project` — the entry is still saved.
 
 ### Session History Search
 

@@ -49,6 +49,18 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/**
+ * Warnings may be multi-line (first line = gist, rest = detail). The collapsed
+ * summary shows only the gist, shortened — the full text lives in the expansion.
+ */
+const COLLAPSED_WARNING_CHARS = 80;
+function collapsedWarning(warning: string): string {
+  const gist = warning.split(/\r?\n/)[0].trim() || warning;
+  return gist.length > COLLAPSED_WARNING_CHARS
+    ? `${gist.slice(0, COLLAPSED_WARNING_CHARS - 1).trimEnd()}…`
+    : gist;
+}
+
 function scopeLabel(project: string | null): string {
   return project ? `project:${project}` : "global";
 }
@@ -124,7 +136,8 @@ export function memoryResultView(result: unknown): SharedOutputView {
   if (showKeywords) parts.push(keywordsLine);
   if (evicted > 0) parts.push(`evicted: ${evicted}`);
   if (entryCount !== undefined) parts.push(countLabel(entryCount, "entry", "entries"));
-  if (warning) parts.push(`Warning: ${warning}`);
+  // The collapsed line carries only the gist; the full text stays in the expansion.
+  if (warning) parts.push(`Warning: ${collapsedWarning(warning)}`);
 
   const lines = [primaryMessage || `${outcome}.`];
   const meta = [`target: ${target ?? "?"}`, `scope=${scopeLabel(project)}`];

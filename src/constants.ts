@@ -96,6 +96,12 @@ Memory write targets:
 - project: project-specific conventions, architecture decisions, commands, package manager choices, and repo workflows.
 - failure: failures, corrections, insights, conventions, preferences, and tool quirks captured as categorized lessons.
 
+Scope rule — classify by DOMAIN, not by the speech act:
+- If the fact names a repo, path, package, command, branch, host or a specific tool/runtime setup, it is project-scoped: use target "project" — even when it was phrased as a standing instruction ("when I say X, do Y").
+- target "user" is only for what stays true in EVERY project (identity, preferences, communication style, cross-project habits).
+- A mixed fact must be split: the cross-project rule goes to "user"/"memory", the concrete repo, package and command details go to "project".
+- Test before saving: "if I switched to another repository, would this still be true?" No -> "project".
+
 memory_search filters:
 - target accepts "memory", "user", "failure", or "project" (project-attributed memory entries).
 - project filters project-scoped memories by project name.
@@ -144,7 +150,7 @@ Persistent memory is available through memory tools. Do not assume memory has al
 
 Use memory_search when the current task may depend on durable context from previous sessions: user preferences, project conventions, prior decisions, known failures, corrections, insights, or tool quirks.
 
-Memory write targets: user for preferences/profile; memory for global notes and environment/tool facts; project for repo-specific conventions and workflows; failure for categorized lessons.
+Memory write targets: user for preferences/profile; memory for global notes and environment/tool facts; project for repo-specific conventions and workflows; failure for categorized lessons. Classify by domain, not by the speech act: anything naming a repo, path, package, command or branch is "project" even when phrased as a standing instruction ("when I say X, do Y"); "user" only holds what stays true in EVERY project, and mixed facts must be split.
 
 memory_search filters: target searches user/global/failure memories; project filters project-scoped memories; category filters categorized failure/lesson memories only.
 
@@ -184,6 +190,12 @@ MEMORY TARGETS:
 - 'project': project-specific notes -- architecture decisions, API quirks, and team norms
 - 'failure': failures, corrections, insights, conventions, preferences, and tool quirks
 
+SCOPE RULE -- classify by DOMAIN, not by the speech act:
+- A fact that names a repo, path, package, command, branch, host or specific tool/runtime setup is project-scoped: use target "project", even when it was phrased as a standing user instruction ("when I say X, do Y").
+- target "user" is only for facts that stay true in EVERY project (identity, preferences, communication style, cross-project habits).
+- Split a mixed fact: the cross-project rule to "user"/"memory", the repo, package and command details to "project".
+- Ask yourself: "if I switched to another repository, would this still be true?" No -> "project".
+
 TOOLS:
 - memory_add requires target and content; category and failure_reason are optional for failure memories.
 - memory_replace requires target, old_text, and content.
@@ -198,8 +210,10 @@ export function buildMemoryTargetRoutingGuidance(hasProjectStore: boolean): stri
     ? '- Project-specific facts, conventions, and workflows: use target "project" (the current project memory section is available).'
     : '- No current project memory section is available: do not emit target "project"; use target "memory" for non-user, non-failure facts.';
 
-  return `**Target routing**:
-- User identity, preferences, and profile facts: use target "user".
+  return `**Target routing** (classify by domain, not by the speech act):
+- If the fact names a repo, path, package, command, branch or specific tool setup, it is project-scoped: use target "project" — even when the user phrased it as a standing instruction ("when I say X, do Y"). Ask: "if I switched to another repository, would this still be true?" No -> "project".
+- Split mixed facts: the cross-project rule goes to "user"/"memory", the concrete details go to "project".
+- User identity, preferences, and profile facts that hold in every project: use target "user".
 - Global or cross-project facts: use target "memory".
 ${projectRule}
 - Failures, corrections, insights, and tool quirks: use target "failure" (keep these categorized as failure memories; do not reroute them to project or global memory).`;

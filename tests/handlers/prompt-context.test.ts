@@ -28,6 +28,10 @@ describe("buildPromptContext", () => {
     assert.match(result, /session_search: search indexed past conversation messages/);
     assert.match(result, /skill_manage: list, view, create, patch, update, and delete procedural skills/);
     assert.match(result, /Always pass scope explicitly on create/);
+    // The scope rule that the live mis-scoping incident asked for.
+    assert.match(result, /classify by DOMAIN, not by the speech act/i);
+    assert.match(result, /even when it was phrased as a standing instruction/);
+    assert.match(result, /stays true in EVERY project/);
     assert.match(result, /Do not create skills for one-off task state/);
     assert.doesNotMatch(result, /category="preference"/);
     assert.doesNotMatch(result, /inspect, and update procedural skills/);
@@ -46,6 +50,11 @@ describe("buildPromptContext", () => {
     );
 
     assert.strictEqual(result, MEMORY_POLICY_PROMPT);
+  });
+
+  it("carries the scope rule in the compact policy too", async () => {
+    assert.match(MEMORY_POLICY_PROMPT_COMPACT, /Classify by domain, not by the speech act/);
+    assert.match(MEMORY_POLICY_PROMPT_COMPACT, /"user" only holds what stays true in EVERY project/);
   });
 
   it("returns the compact policy prompt when policy style is compact", async () => {

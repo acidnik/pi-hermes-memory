@@ -26,6 +26,7 @@ import { getCurrentSessionId } from "../session-id.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import type { MemoryCategory, MemoryResult } from "../types.js";
 import { normalizeMemoryLookupText } from "../store/memory-lookup.js";
+import { buildScopeHintWarning, detectProjectScopeSignals } from "../store/scope-lint.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { memoryResultView } from "./tool-result-views.js";
 
@@ -42,7 +43,8 @@ const MEMORY_TOOL_DISPLAY_FIELDS = [
   "project",
 ] as const satisfies readonly (keyof MemoryResult)[];
 
-function appendSyncWarning(result: MemoryResult, warning: string): MemoryResult {
+/** Attach a non-blocking warning to a successful result (message + warnings). */
+function appendWarning(result: MemoryResult, warning: string): MemoryResult {
   const warnings = [...(((result as any).warnings ?? []) as string[]), warning];
   const message = result.message ? `${result.message} Warning: ${warning}` : warning;
   return {
@@ -489,9 +491,15 @@ export function registerMemoryTool(
       if (reconciliationWarning !== undefined) syncWarning = reconciliationWarning;
     }
 
-    if (syncWarning && result.success) result = appendSyncWarning(result, syncWarning);
+    if (syncWarning && result.success) result = appendWarning(result, syncWarning);
     if (rawTarget === "project" && result.success) {
       result = { ...result, target: "project", project: activeProjectName || undefined };
+    }
+    if (rawTarget === "user" && content && action !== "remove" && result.success) {
+      // Scope lint: a fact phrased as a user instruction can still be
+      // project-scoped. Never blocks the write — it only reports the suspicion.
+      const hint = detectProjectScopeSignals(content);
+      if (hint) result = appendWarning(result, buildScopeHintWarning(hint, rawTarget));
     }
 
     return {
@@ -532,7 +540,10 @@ This action-specific tool accepts only the parameters listed in its schema.`;
   };
 
   const target = StringEnum(["memory", "user", "project", "failure"] as const, {
-    description: "Memory scope. Use failure for failures, corrections, insights, and tool quirks.",
+    description:
+      "Memory scope. Use failure for failures, corrections, insights, and tool quirks. "
+      + "Classify by domain, not by the speech act: a fact that names a repo, path, package, command or branch belongs to \"project\" "
+      + "even when it was phrased as a standing instruction (\"when I say X, do Y\"); \"user\" only holds what stays true in EVERY project.",
   });
   const category = StringEnum(["failure", "correction", "insight", "preference", "convention", "tool-quirk"] as const, {
     description: "Category for failure memories.",
