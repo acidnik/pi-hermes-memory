@@ -23,8 +23,8 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCOPE = "@earendil-works";
-// pi-tui is a direct dependency rather than a peer, but its types cross the
-// boundary (ExtensionCommandContext.ui.custom takes a pi-tui TUI). Leaving it
+// pi-tui is a host-provided peer whose types cross the boundary
+// (ExtensionCommandContext.ui.custom takes a pi-tui TUI). Leaving it
 // at a different version yields a duplicate-private-property error instead of
 // a real finding, so it moves with the floor.
 const FLOOR_PACKAGES = [`${SCOPE}/pi-coding-agent`, `${SCOPE}/pi-ai`, `${SCOPE}/pi-tui`];

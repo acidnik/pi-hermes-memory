@@ -44,14 +44,17 @@ function npm(args, cwd) {
 try {
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   await mkdir(process.env.PI_CODING_AGENT_DIR);
-  const [packed] = JSON.parse(npm(["pack", "--ignore-scripts", "--json", "--pack-destination", root], repo));
+  // npm ≤11 prints an array of pack results, npm 12 an object keyed by package name.
+  const packResult = JSON.parse(npm(["pack", "--ignore-scripts", "--json", "--pack-destination", root], repo));
+  const [packed] = Array.isArray(packResult) ? packResult : Object.values(packResult);
   const install = join(root, "install");
   await mkdir(install);
   await writeFile(join(install, "package.json"), JSON.stringify({ name: "production-smoke", private: true }));
   npm(["install", "--omit=dev", "--omit=peer", "--ignore-scripts", "--no-audit", "--no-fund", join(root, packed.filename)], install);
   const installed = join(install, "node_modules", "pi-hermes-memory");
   const requireFromPackage = createRequire(join(installed, "package.json"));
-  for (const specifier of ["@earendil-works/pi-ai/compat", "@earendil-works/pi-coding-agent"]) {
+  // Every host-provided package is a peer: none may ship beside the package.
+  for (const specifier of ["@earendil-works/pi-ai/compat", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
     assert.throws(() => requireFromPackage.resolve(specifier), { code: "MODULE_NOT_FOUND" });
   }
 
