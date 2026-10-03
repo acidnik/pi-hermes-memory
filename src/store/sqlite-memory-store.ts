@@ -163,6 +163,32 @@ function serializeKeywords(keywords: string[] | null | undefined): string | null
   return cleaned.length > 0 ? JSON.stringify(cleaned) : null;
 }
 
+function splitKeywordWords(value: string): string[] {
+  return value.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/**
+ * Whole-word match between a retrieval term and an entry's curated keywords.
+ *
+ * Retrieval anchors on keywords, so a term must cover whole words of a keyword
+ * instead of occurring anywhere inside it: `carousel` matches the keyword
+ * `gallery-carousel`, while `button` no longer matches `nextButton` and `path`
+ * no longer matches `composedPath`. Words are split on non-letter/non-digit
+ * characters (hyphens, underscores, spaces, brackets…); camelCase is
+ * deliberately NOT split, so glued identifiers stay opaque and only the
+ * identifier itself anchors. A multi-word term (a path-like identifier) matches
+ * when every one of its words is present in the same keyword.
+ */
+export function matchesKeywordWord(term: string, keywords: readonly string[] | null | undefined): boolean {
+  const termWords = splitKeywordWords(term);
+  if (termWords.length === 0) return false;
+  for (const keyword of keywords ?? []) {
+    const keywordWords = new Set(splitKeywordWords(keyword));
+    if (termWords.every((word) => keywordWords.has(word))) return true;
+  }
+  return false;
+}
+
 function mapRow(row: {
   id: number;
   project: string | null;
@@ -1178,7 +1204,15 @@ export function searchMemories(
   // LIKE/recency — weakly related entries must not surface. The matched terms
   // travel with each entry so the UI can highlight them.
   if (requireMatchedTerms && requireMatchedTerms > 1) {
-    const terms = collectNaturalLanguageTerms(query);
+    // The gate counts DISTINCT terms, so a word repeated in the query (the same
+    // log line pasted twice) must not reach the bar on its own. Dedup is
+    // case-insensitive and keeps the first spelling for display.
+    const distinctTerms = new Map<string, string>();
+    for (const term of collectNaturalLanguageTerms(query)) {
+      const key = term.toLowerCase();
+      if (!distinctTerms.has(key)) distinctTerms.set(key, term);
+    }
+    const terms = [...distinctTerms.values()];
     if (terms.length < requireMatchedTerms) return [];
 
     // keywordsOnly restricts every MATCH to the curated keywords column via
@@ -1190,9 +1224,26 @@ export function searchMemories(
     const candidates = runSearch(orQuery, limit * 3);
     if (candidates.length === 0) return [];
 
-    // NOTE: `MATCH ? AND rowid = ?` on the same FTS5 table ignores the rowid
-    // filter (SQLite FTS5 quirk), so per-term rowid sets are resolved first
-    // and matched-term counts are computed in JS.
+    const collected: SqliteMemoryEntry[] = [];
+
+    if (keywordsOnly) {
+      // The candidates above came from a trigram substring match, which is a
+      // superset of the anchors we accept; the word check below narrows it to
+      // whole keyword words, so `path` cannot ride on `composedPath`.
+      for (const entry of candidates) {
+        const matched = terms.filter((term) => matchesKeywordWord(term, entry.keywords));
+        if (matched.length < requireMatchedTerms) continue;
+        entry.matchedTerms = matched;
+        collected.push(entry);
+        if (collected.length >= limit) break;
+      }
+      return collected;
+    }
+
+    // Content mode: terms may match anywhere in the entry text, so the counts
+    // come from per-term FTS lookups. NOTE: `MATCH ? AND rowid = ?` on the same
+    // FTS5 table ignores the rowid filter (SQLite FTS5 quirk), so per-term
+    // rowid sets are resolved first and matched-term counts are computed in JS.
     const termRowids = new Map<string, Set<number>>();
     const byRow = db.prepare('SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?');
     for (const term of terms) {
@@ -1200,12 +1251,8 @@ export function searchMemories(
       termRowids.set(term, new Set(rows.map((row) => Number(row.rowid))));
     }
 
-    const collected: SqliteMemoryEntry[] = [];
     for (const entry of candidates) {
-      const matched: string[] = [];
-      for (const term of terms) {
-        if (termRowids.get(term)?.has(entry.id)) matched.push(term);
-      }
+      const matched = terms.filter((term) => termRowids.get(term)?.has(entry.id));
       if (matched.length < requireMatchedTerms) continue;
       entry.matchedTerms = matched;
       collected.push(entry);

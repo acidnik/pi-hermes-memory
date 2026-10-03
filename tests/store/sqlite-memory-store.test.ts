@@ -664,6 +664,20 @@ describe('sqlite-memory-store', () => {
       assert.strictEqual(gate4.length, 0, 'bar above term count returns empty');
     });
 
+    it('requireMatchedTerms counts distinct terms, so a repeated word cannot satisfy the gate', () => {
+      addMemory(dbManager, 'quux corge notes');
+
+      // A word written twice is ONE term: counting occurrences let a single
+      // word (a log line pasted twice) reach the bar on its own and inject a
+      // weak single-term match.
+      assert.strictEqual(searchMemories(dbManager, 'quux quux', { requireMatchedTerms: 2 }).length, 0);
+      assert.strictEqual(searchMemories(dbManager, 'Quux quux', { requireMatchedTerms: 2 }).length, 0);
+
+      const twoTerms = searchMemories(dbManager, 'quux corge', { requireMatchedTerms: 2 });
+      assert.strictEqual(twoTerms.length, 1, 'two distinct terms still pass');
+      assert.deepStrictEqual(twoTerms[0].matchedTerms, ['quux', 'corge']);
+    });
+
     it('keywordsOnly matches the keywords column and ignores full content', () => {
       // Word only in content is invisible; a keyword-list word matches even
       // when it never appears in the content text.
@@ -681,6 +695,33 @@ describe('sqlite-memory-store', () => {
       const hits = searchMemories(dbManager, 'kubernetes monorepo', { requireMatchedTerms: 2, keywordsOnly: true });
       assert.strictEqual(hits.length, 1);
       assert.deepStrictEqual(hits[0].matchedTerms, ['kubernetes', 'monorepo']);
+    });
+
+    it('keywordsOnly anchors on whole keyword words, never on substrings', () => {
+      syncMemoryEntry(dbManager, {
+        content: 'the carousel arrows live in the shadow root of the custom element',
+        target: 'memory',
+        project: null,
+        keywords: ['gallery-carousel', 'nextButton', 'composedPath', 'test-gallery-nav'],
+      });
+      const gated = { requireMatchedTerms: 2, keywordsOnly: true } as const;
+
+      // Fragments of a glued identifier are not anchors: `button` and `path`
+      // used to ride on nextButton/composedPath.
+      assert.strictEqual(searchMemories(dbManager, 'button path', gated).length, 0);
+
+      // A whole word of a hyphenated keyword anchors, and so does the
+      // identifier written out in full.
+      const exact = searchMemories(dbManager, 'composedPath carousel', gated);
+      assert.strictEqual(exact.length, 1);
+      assert.deepStrictEqual(exact[0].matchedTerms, ['composedPath', 'carousel']);
+
+      const identifier = searchMemories(dbManager, 'test-gallery-nav carousel', gated);
+      assert.strictEqual(identifier.length, 1);
+      assert.deepStrictEqual(identifier[0].matchedTerms, ['test-gallery-nav', 'carousel']);
+
+      // One whole-word hit alone still cannot clear the gate.
+      assert.strictEqual(searchMemories(dbManager, 'carousel button', gated).length, 0);
     });
   });
 

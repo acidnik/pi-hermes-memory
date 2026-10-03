@@ -120,6 +120,7 @@ Keywords — automatic retrieval matches ONLY them:
 - Before each user message and on bash tool calls the extension searches the keywords column only. An entry saved without keywords is never surfaced that way; memory_search can still find it by its content.
 - A keyword is a word that should pull THIS entry when it later shows up in a user prompt or a bash command: the specific terms the user or the agent would really use for this fact. Prefer specific over generic ("expandPasteMarkers", "транскрипция", not "editor", "memory").
 - Give every durable entry 3-8 keywords: synonyms, other languages (RU↔EN), inflections (index → indices, индексация), plus the file, command, package and tool names involved. Generic words match everything and only add noise.
+- A term anchors an entry only as a whole word of a keyword: \`carousel\` matches the keyword \`gallery-carousel\`, while \`button\` does not match \`nextButton\` and \`path\` does not match \`composedPath\` (glued identifiers stay opaque, hyphen/space-separated words do not). Write the words a user would actually type, and keep file names, identifiers and paths next to their spoken form rather than as the only keyword.
 
 memory_search filters:
 - target accepts "memory", "user", "failure", or "project" (project-attributed memory entries).
@@ -266,7 +267,7 @@ export const COMBINED_REVIEW_PROMPT = `Review the conversation above and conside
 
 For failures, include: what was tried, why it failed, what error occurred, and what worked instead.
 
-**Keywords**: automatic retrieval (before user messages, on bash tool calls) matches keywords ONLY — a fact saved without them is never surfaced that way. For every fact you save, provide 3-8 keywords that should pull it later: the specific terms the user or the agent would really use for this fact (not generic words like "memory" or "fix"), plus synonyms, other languages (RU↔EN), inflections (index → indices, индексация) and the file, command, package or tool names involved.
+**Keywords**: automatic retrieval (before user messages, on bash tool calls) matches keywords ONLY — a fact saved without them is never surfaced that way. For every fact you save, provide 3-8 keywords that should pull it later: the specific terms the user or the agent would really use for this fact (not generic words like "memory" or "fix"), plus synonyms, other languages (RU↔EN), inflections (index → indices, индексация) and the file, command, package or tool names involved. A term anchors an entry only as a whole word of a keyword (\`carousel\` matches \`gallery-carousel\`, \`button\` does not match \`nextButton\`), so keep file names and identifiers next to the spoken words a user would type.
 
 **Skills**: Do NOT create or modify skills in this background review. Procedural skills are managed explicitly by the main agent through the skill_manage tool during normal work, not by this review subprocess.
 
